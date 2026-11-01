@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up raw collector files hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -16,7 +16,8 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 ## How I want to work with you (important)
 - I write the modeling, simulation and tiebreaker code myself. Do not write those for me.
   Review it, explain, point out bugs, ask me questions, and write tests when I ask.
-- For the data collector: help with Kalshi API details and robustness, review my code. I write it.
+- The data collector is the exception: Claude writes and maintains it (my decision, 2026-11-01),
+  so my time goes to trading decisions and intuition rather than data plumbing.
 - Push back. If my model solves a slightly different problem than the one I stated, say so.
 - Before I compute anything, make me state: what is random, what I condition on (with timestamp),
   and the exact quantity. Ask me to guess the answer first.
@@ -34,6 +35,8 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 - Record: order book snapshots (full depth, both sides) and trades, with UTC timestamps.
 - Keep raw API responses (append-only), plus a tidy table derived from them.
 - Log gaps and errors explicitly; a missing snapshot must be distinguishable from an empty book.
+- Game market trades are not polled (too heavy, not needed for fills); books are. Trades stay
+  fetchable from Kalshi later. Snapshots run every 30 minutes; see README.md.
 - Must run on an always-on machine (VPS or scheduled job), not a laptop that sleeps.
 - Read Kalshi's official API docs for endpoints, auth and rate limits; don't guess.
 
