@@ -10,8 +10,7 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 - Decision it ends in: per team, fair value + uncertainty band -> quote or don't, at what price.
 - Deadline: end of the 2026 regular season (early Jan 2027). "No edge after fees, and here's
   why" is an acceptable result.
-- Artifact: short writeup + this repo. Bridge to credit SMM: fair value from sparse, noisy
-  quotes in a thin book, scored by markouts.
+- Artifact: short writeup + this repo.
 
 ## How I want to work with you (important)
 - I write the modeling, simulation and tiebreaker code myself. Do not write those for me.
@@ -24,7 +23,7 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 - Point me to human-written sources (papers, official docs), never content farms.
 
 ## Phase plan
-1. Collector (now): record data every day, starting immediately; lost days can't be recovered.
+1. Collector: record data every day, starting immediately; lost days can't be recovered.
 2. Ratings: back out team ratings from current game lines; spread -> win prob (Stern 1991).
 3. Season sim + tiebreakers; validate against past seasons' actual seeding.
 4. Daily fair values, paper quotes, markouts (1h / 24h / after next game day). Writeup.
