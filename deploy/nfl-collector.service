@@ -1,0 +1,15 @@
+[Unit]
+Description=Kalshi NFL collection round
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=collector
+WorkingDirectory=/opt/nfl-playoff-algo
+EnvironmentFile=/etc/nfl-collector.env
+Environment=COLLECTOR_DATA_DIR=/var/lib/nfl-collector
+ExecStart=/usr/bin/python3 -m collector.round
+# Raw data is already safe by now, so a tidy failure must not fail the round.
+ExecStartPost=-/usr/bin/python3 -m collector.tidy
+TimeoutStartSec=25min

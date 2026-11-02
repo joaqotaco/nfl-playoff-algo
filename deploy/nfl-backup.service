@@ -1,0 +1,12 @@
+[Unit]
+Description=Copy raw collector files off this machine
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=collector
+EnvironmentFile=/etc/nfl-collector.env
+# --immutable refuses to overwrite a backed-up file, and unfinished files are skipped.
+ExecStart=/usr/bin/rclone copy /var/lib/nfl-collector/raw ${BACKUP_REMOTE} --immutable --include "*.jsonl.gz"
+ExecStartPost=-/usr/bin/curl -fsS -m 10 ${BACKUP_HEALTHCHECK_URL}
