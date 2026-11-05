@@ -8,7 +8,7 @@ DATA_DIR=/var/lib/nfl-collector
 ENV_FILE=/etc/nfl-collector.env
 
 apt-get update
-apt-get install -y python3 rclone curl sqlite3
+apt-get install -y python3 python3-numpy rclone curl sqlite3
 
 id collector >/dev/null 2>&1 || useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin collector
 install -d -m 750 "$DATA_DIR"
