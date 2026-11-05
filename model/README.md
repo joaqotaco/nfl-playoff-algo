@@ -28,3 +28,25 @@ a past fit can be rerun on the file it used.
 The output also shows, for each upcoming game, a normal distribution fitted to Kalshi's
 spread strikes ("SD"), and Kalshi's moneyline next to Stern's win probability for the same
 line.
+
+## Season simulation and fair values
+
+| File | What it does |
+|---|---|
+| `standings.py` | Official NFL tiebreakers and seeding. Net touchdowns is skipped (no data), so ties that survive net points go to a coin toss. |
+| `validate.py` | Seeds every season 2002-2025 from its results and checks it against the real playoff field. All 48 conference-seasons match. |
+| `simulate.py` | Plays out the rest of the season many times. This week's games use Kalshi's line; later games use ratings plus team-strength uncertainty. Ties at 0.34%. |
+| `fairvalue.py` | P(playoffs) and P(division) per team at T, next to Kalshi's bid/ask from the same collector round. Saves a CSV in `data/fairvalues/`. |
+| `calibrate.py` | Pooled half-life test and the strength-uncertainty estimates, from 2015-2025 lines. |
+| `backtest.py` | Runs the whole model from weeks 6, 9, 12, 15 of 2015-2025 and scores it against who made the playoffs. |
+
+```sh
+python3 -m model.validate
+python3 -m model.fairvalue --at 2026-11-05T05:00:00Z --half-life 2 --ratings-use-kalshi --uncertainty calibrated
+python3 -m model.calibrate        # about 1 minute
+python3 -m model.backtest         # about 2 minutes
+```
+
+Game outcomes: the home margin is normal around the line, with the SD fitted to Kalshi's
+spread strikes at T (about 11.4). On 2,885 games from 2015-2025, an SD of 11-11.4 predicts
+winners from lines better than Stern's 13.86.

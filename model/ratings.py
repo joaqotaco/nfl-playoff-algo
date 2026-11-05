@@ -5,7 +5,7 @@ Home field is 0 at neutral sites. Ratings average zero. Older lines count less:
 weight = 0.5 ** (age in weeks / half-life).
 
     python3 -m model.ratings                  fit at the latest 14:00 UTC
-    python3 -m model.ratings --at 2026-11-04T14:00:00Z --half-life 4
+    python3 -m model.ratings --at 2026-11-04T14:00:00Z --half-life 8
     python3 -m model.ratings --half-life-test
 """
 import argparse
@@ -21,7 +21,7 @@ from model import data
 
 STERN_SIGMA = 13.86
 HALF_LIVES = (1, 2, 4, 8, 16, None)  # None means every line counts equally
-DEFAULT_HALF_LIFE = 4
+DEFAULT_HALF_LIFE = 8  # chosen 2026-11-05; see the half-life test
 
 
 @dataclass(frozen=True)
