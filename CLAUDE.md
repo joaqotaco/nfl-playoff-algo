@@ -13,10 +13,11 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 - Artifact: short writeup + this repo.
 
 ## How I want to work with you (important)
-- I write the modeling, simulation and tiebreaker code myself. Do not write those for me.
-  Review it, explain, point out bugs, ask me questions, and write tests when I ask.
-- The data collector is the exception: Claude writes and maintains it (my decision, 2026-11-01),
-  so my time goes to trading decisions and intuition rather than data plumbing.
+- This is a learning exercise in trading intuition, not a coding exercise (my decision,
+  2026-11-04). Claude writes all the code: collector, ratings, simulation, tiebreakers.
+- I make the decisions. Never make a modeling or trading choice silently: bring me each
+  decision with the options, the evidence and a recommendation, then build what I choose.
+- Explain results so I can defend every number in the writeup.
 - Push back. If my model solves a slightly different problem than the one I stated, say so.
 - Before I compute anything, make me state: what is random, what I condition on (with timestamp),
   and the exact quantity. Ask me to guess the answer first.
@@ -35,7 +36,7 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
 - Keep raw API responses (append-only), plus a tidy table derived from them.
 - Log gaps and errors explicitly; a missing snapshot must be distinguishable from an empty book.
 - Game market trades are not polled (too heavy, not needed for fills); books are. Trades stay
-  fetchable from Kalshi later. Snapshots run every 30 minutes; see README.md.
+  fetchable from Kalshi later. Snapshots run every 30 minutes; see collector/README.md.
 - Must run on an always-on machine (VPS or scheduled job), not a laptop that sleeps.
 - Read Kalshi's official API docs for endpoints, auth and rate limits; don't guess.
 
@@ -47,16 +48,26 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
   7 per conference, P(division) <= P(playoffs).
 
 ## Model spec: status
-In progress. Open items:
-- Settlement: read the KXNFLPLAYOFF rules page (cancellations, forfeits, timing).
-- Random: game outcomes (incl. rare ties), team-strength uncertainty (source of correlation),
-  injuries. Tiebreakers are deterministic rules, not randomness (except the coin toss).
+Agreed (2026-11-04):
+- Quantity: daily at T = 14:00 UTC, P(team is one of its conference's 7 seeds | info at T),
+  as implied by game lines, with a band for model inputs and simulation error.
+- Random: game outcomes given strengths (incl. rare ties); team strength, drawn once per
+  simulated season; tiebreaker coin toss. Strength assumed fixed from T to season end.
+- Conditioning: results final before T (standings, tiebreakers only), lines as of T,
+  remaining schedule.
+- Ratings: line = r_home - r_away + home_field, weighted least squares, ratings average 0.
+  Past games use nflverse spread_line; upcoming games use Kalshi spread strikes at T.
+- Settlement (contract terms read): clinched teams settle Yes early, eliminated settle No once
+  reported; compare open contracts + clinched with 14. Forfeit/withdrawal settles No.
+
+Open decisions:
+- Half-life for rating weights (best value depends on forecast horizon).
+- Game-margin SD: Stern's 13.86 or the ~11 implied by Kalshi's strikes and moneylines.
+- Whether games with a Kalshi line at T use that line directly instead of ratings.
 - Tiebreakers: division, wild-card and 3+-club procedures all differ. Source of truth:
-  NFL Football Operations tiebreaking page. Test my implementation against nflseedr
-  (nflverse) on past seasons.
-- Games with no market line yet (weeks 12-18): ratings fit to current lines; temporary
-  effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into later weeks.
-- Avoid double counting: lines already price injuries known at the snapshot time.
+  NFL Football Operations tiebreaking page. Validate against nflseedr on past seasons.
+- Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
+  later weeks.
 
 ## Error log categories (for my own mistakes)
 - Answered an adjacent question
