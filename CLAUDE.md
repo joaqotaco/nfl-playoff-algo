@@ -60,12 +60,17 @@ Agreed (2026-11-04):
 - Settlement (contract terms read): clinched teams settle Yes early, eliminated settle No once
   reported; compare open contracts + clinched with 14. Forfeit/withdrawal settles No.
 
-Open decisions:
-- Half-life for rating weights (best value depends on forecast horizon).
-- Game-margin SD: Stern's 13.86 or the ~11 implied by Kalshi's strikes and moneylines.
-- Whether games with a Kalshi line at T use that line directly instead of ratings.
-- Tiebreakers: division, wild-card and 3+-club procedures all differ. Source of truth:
-  NFL Football Operations tiebreaking page. Validate against nflseedr on past seasons.
+- Game-margin SD: matched to Kalshi's spread strikes at T (decided 2026-11-05). Confirmed by
+  2015-2025 game winners: SD 11-11.4 beats Stern's 13.86.
+- This week's games use the Kalshi line directly (decided 2026-11-05).
+- Tiebreakers: implemented and matching every 2002-2025 playoff field (model/validate.py).
+
+Open decisions (evidence in model/calibrate.py and model/backtest.py):
+- Half-life: 8 chosen 2026-11-05 on 2026-only evidence; 2015-2025 favors 2 at every horizon.
+- Whether this week's Kalshi lines also feed the ratings (backtest favors yes).
+- Strength uncertainty: the spec's "fixed after T" vs measured lasting + drift + one-off,
+  scaled x2 so the 2015-2025 backtest is calibrated.
+- Fair-value band, paper-quote rule and size, markout scoring.
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
   later weeks.
 
