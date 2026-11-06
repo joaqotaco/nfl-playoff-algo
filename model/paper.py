@@ -35,7 +35,8 @@ from model.league import playoff_ticker
 
 FAIRVALUE_SUFFIX = "-calibrated-hl2-k.csv"
 TICK = 0.01
-# KXNFLPLAYOFF's fee_type is "quadratic": the general trading fees only, no maker fee.
+# No maker fee on KXNFLPLAYOFF: Kalshi's fee schedule (effective 2026-07-07) sets the maker
+# multiplier to 0 for series not listed under Non-Standard Fees, and this one isn't.
 MAKER_FEE = 0.0
 CUSHION = MAKER_FEE + TICK
 QUOTE_DELAY = timedelta(minutes=10)

@@ -88,7 +88,9 @@ Agreed (2026-11-04/05):
   cushion (maker fee + 1c). Live from 14:10 UTC to the next kickoff or next 14:10.
   Filled only if a non-block trade goes through the price. Also log a taker comparison
   (cross the spread when the gap beats the taker fee). Markouts at 1h, 24h, next game day.
-  No maker fee on KXNFLPLAYOFF: fee_type "quadratic" is the general table only (API docs).
+  No maker fee on KXNFLPLAYOFF: the fee schedule (effective 2026-07-07) sets the maker
+  multiplier to 0 unless a series is listed under Non-Standard Fees, and KXNFLPLAYOFF isn't
+  (the division, game, conference and Super Bowl series are, at 1 x 0.0175 x P(1-P)).
 
 Open decisions:
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
