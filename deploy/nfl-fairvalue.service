@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily fair values for the playoff and division contracts
+Description=Daily fair values, paper quotes and markouts
 Wants=network-online.target
 After=network-online.target
 
@@ -11,5 +11,7 @@ EnvironmentFile=/etc/nfl-collector.env
 Environment=COLLECTOR_DATA_DIR=/var/lib/nfl-collector
 # Uses the 14:00 collector round; --refresh downloads the latest nflverse results.
 ExecStart=/usr/bin/python3 -m model.fairvalue --refresh --sims 20000 --quiet
+# Rebuild paper quotes, fills and markouts from everything saved so far.
+ExecStartPost=/usr/bin/python3 -m model.paper --quiet
 ExecStartPost=-/usr/bin/curl -fsS -m 10 ${FAIRVALUE_HEALTHCHECK_URL}
 TimeoutStartSec=20min

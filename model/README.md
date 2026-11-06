@@ -74,3 +74,21 @@ noise (measured from 2015-2025 line movements), scaled x1.5. Later lines also re
 simulated results: 0.061 points per point a team beat its line. Without that feedback a
 team's games were far less tied together than in reality (`python3 -m model.backtest
 --win-totals --feedback 0.061`).
+
+## Paper quotes and markouts (`paper.py`)
+
+Rebuilt from scratch after each daily fair-value run, into `paper.sqlite`:
+
+- **Quotes:** for each playoff contract where the band excludes Kalshi's 14:00 book, one paper
+  contract one tick inside the market (never crossing it), live from 14:10 UTC to the next
+  kickoff or the next day's quote. No maker fee on KXNFLPLAYOFF (`fee_type` quadratic).
+- **Fills:** only when a non-block trade goes through the price. A window still running is `open`.
+- **Taker comparison:** cross the spread at the 14:30 snapshot if the band still beats the price
+  after the taker fee.
+- **Markouts:** per contract after fees, at the first snapshot 1h and 24h after entry and at
+  14:00 UTC the day after the next game day. "mid" measures information; "exit" is what
+  closing out by crossing the spread would have made.
+
+```sh
+python3 -m model.paper    # rebuild and print the report
+```

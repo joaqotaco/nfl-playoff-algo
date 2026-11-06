@@ -82,13 +82,15 @@ Agreed (2026-11-04/05):
 
 - Next week's Kalshi moneylines become lines when no spread strikes are listed (2026-11-06).
 - Band: fair values across uncertainty x1 to x2 (with feedback), widened by 2 simulation SEs (2026-11-06).
-- Paper quotes (agreed 2026-11-06, not built yet): playoff contracts only, 1 contract.
+- Paper quotes (agreed 2026-11-06, built in model/paper.py): playoff contracts only, 1 contract.
   Quote only when the band excludes the market: bid if band low > best ask, ask if band
   high < best bid. Price = best bid + 1c (or best ask - 1c), never past band edge minus a
   cushion (maker fee + 1c). Live from 14:10 UTC to the next kickoff or next 14:10.
   Filled only if a non-block trade goes through the price. Also log a taker comparison
   (cross the spread when the gap beats the taker fee). Markouts at 1h, 24h, next game day.
-  Maker fee on KXNFLPLAYOFF still to confirm (series fee_type "quadratic").
+  No maker fee on KXNFLPLAYOFF: the fee schedule (effective 2026-07-07) sets the maker
+  multiplier to 0 unless a series is listed under Non-Standard Fees, and KXNFLPLAYOFF isn't
+  (the division, game, conference and Super Bowl series are, at 1 x 0.0175 x P(1-P)).
 
 Open decisions:
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
