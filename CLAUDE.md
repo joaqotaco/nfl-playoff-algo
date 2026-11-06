@@ -66,11 +66,25 @@ Agreed (2026-11-04/05):
 - Ratings: half-life 2 weeks; this week's Kalshi lines feed the ratings and are also used
   directly for this week's games (decided 2026-11-05, evidence in model/calibrate.py).
 - Strength uncertainty: lasting + weekly drift + one-off game noise, measured from line
-  movements and scaled x2 (decided 2026-11-05). x1.75-x2.5 score about equally in the
-  2015-2025 backtest, so that range belongs in the band.
+  movements and scaled x2 (decided 2026-11-05). Every component checks out at x1, but the
+  2015-2025 season backtest prefers ~x2. Investigated 2026-11-06 (model/calibrate.py --linked,
+  model/backtest.py --win-totals): errors are NOT linked between teams beyond what the
+  schedule implies. The real gap: lines react to results (0.061 pt per point a team beats its
+  line), so a team's games are tied together; the simulation's drift ignored simulated
+  results. With that feedback, x1.5 calibrates win totals and win differences. Pending
+  decision: adopt feedback 0.061 + x1.5 (and pick the band around it).
+
+- Next week's Kalshi moneylines become lines when no spread strikes are listed (2026-11-06).
+- Band: fair values across uncertainty x1 to x2.5, widened by 2 simulation SEs (2026-11-06).
+- Paper quotes (agreed 2026-11-06, not built yet): playoff contracts only, 1 contract.
+  Quote only when the band excludes the market: bid if band low > best ask, ask if band
+  high < best bid. Price = best bid + 1c (or best ask - 1c), never past band edge minus a
+  cushion (maker fee + 1c). Live from 14:10 UTC to the next kickoff or next 14:10.
+  Filled only if a non-block trade goes through the price. Also log a taker comparison
+  (cross the spread when the gap beats the taker fee). Markouts at 1h, 24h, next game day.
+  Maker fee on KXNFLPLAYOFF still to confirm (series fee_type "quadratic").
 
 Open decisions:
-- Fair-value band, paper-quote rule and size, markout scoring.
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
   later weeks.
 

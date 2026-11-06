@@ -5,9 +5,10 @@
     python3 -m model.fairvalue --uncertainty measured --uncertainty calibrated
     python3 -m model.fairvalue --since 2026-11-02 --quiet  backfill every 14:00 UTC since then
 
-Defaults are the decisions of 2026-11-05: half-life 2 weeks, this week's Kalshi lines in
-the ratings (so lasting news such as a season-ending injury reaches later weeks) and also
-used directly for this week's games, calibrated strength uncertainty.
+Defaults are the decisions of 2026-11-05/06: half-life 2 weeks; Kalshi lines at T (from spread
+strikes, or from moneylines for games with no strikes yet) feed the ratings, so lasting news
+such as a season-ending injury reaches later weeks, and are used directly for their games;
+calibrated strength uncertainty; band across x1 to x2.5.
 """
 import argparse
 import csv
@@ -24,9 +25,10 @@ from model.league import CONFERENCE_OF, TEAMS, division_ticker, playoff_ticker
 from model.ratings import DEFAULT_HALF_LIFE, fit, lines_at, past_lines
 from model.simulate import Uncertainty, build_schedule, simulate
 
-# The band: fair values across these multiples of the measured uncertainty (the range the
-# 2015-2025 backtest can't tell apart), widened by BAND_SE simulation standard errors.
-BAND_FACTORS = (1.75, 2.5)
+# The band: fair values across these multiples of the measured uncertainty, widened by
+# BAND_SE simulation standard errors. x1 is what every component test supports, x2.5 the top
+# of what the 2015-2025 season backtest supports (decided 2026-11-06).
+BAND_FACTORS = (1.0, 2.5)
 BAND_SE = 2
 
 UNCERTAINTY = {
@@ -157,8 +159,8 @@ def main():
     parser.add_argument("--half-life", type=float, default=DEFAULT_HALF_LIFE)
     parser.add_argument("--ratings-exclude-kalshi", dest="ratings_use_kalshi", action="store_false")
     parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--moneylines", action="store_true",
-                        help="also use moneyline-only games (next week) as Kalshi lines")
+    parser.add_argument("--no-moneylines", dest="moneylines", action="store_false",
+                        help="ignore moneyline-only games (usually next week's)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--quiet", action="store_true", help="only print where results are saved")
     args = parser.parse_args()

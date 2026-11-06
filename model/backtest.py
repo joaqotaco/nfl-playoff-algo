@@ -3,6 +3,7 @@
 
     python3 -m model.backtest                 compare model setups
     python3 -m model.backtest --scale-test    choose the strength-uncertainty factor
+    python3 -m model.backtest --win-totals    are remaining-win totals calibrated?
 
 nflverse closing lines stand in for Kalshi's lines at T for that week's games. Also
 checks which game-outcome spread (sigma) best predicts real game winners from lines.
@@ -15,7 +16,7 @@ import numpy as np
 from collector.round import data_dir
 from model import data
 from model.calibrate import load
-from model.league import INDEX, TEAMS
+from model.league import CONFERENCE_OF, DIVISION_OF, INDEX, TEAMS
 from model.ratings import Line, fit, past_lines
 from model.simulate import Uncertainty, build_schedule, simulate
 from model.validate import actual_field, load_rows, wild_cards
@@ -84,13 +85,74 @@ def score(preds):
     return brier, log_loss, buckets
 
 
+def win_totals_test(seasons_games, factors=(1.0, 2.0), sims=1000, base=None):
+    """z^2 = (actual remaining wins - predicted mean)^2 / predicted variance, averaged.
+
+    About 1 means the spread of win totals is right; above 1 means overconfident.
+    Splits the playoff overconfidence into "wins" vs "turning wins into playoff spots".
+    """
+    base = base or Uncertainty()
+    for factor in factors:
+        z2, by_season, parts, pairs = [], {}, [], {}
+        for season, games in zip(SEASONS, seasons_games):
+            for week in WEEKS:
+                current = [g for g in games if g.week == week and g.spread_line is not None]
+                if not current:
+                    continue
+                at = min(g.kickoff for g in current)
+                lines = past_lines(games, at) + [Line(g.home, g.away, g.neutral, g.spread_line, g.kickoff, "c")
+                                                 for g in current]
+                ratings = fit(lines, at, 2)
+                market = {(g.home, g.away, g.kickoff.astimezone(data.EASTERN).strftime("%Y-%m-%d")): g.spread_line
+                          for g in current}
+                schedule = build_schedule(games, at, ratings, market)
+                result = simulate(schedule, 11.4, base.scaled(factor), sims, seed=season * 100 + week,
+                                  wild_cards=wild_cards(season))
+                left = [g for g in games if g.kickoff >= at]
+                actual = np.zeros(32)
+                for g in left:
+                    share = 1.0 if g.result > 0 else 0.0 if g.result < 0 else 0.5
+                    actual[INDEX[g.home]] += share
+                    actual[INDEX[g.away]] += 1 - share
+                z = (actual - result.wins_mean) ** 2 / result.wins_var
+                z2 += list(z)
+                by_season.setdefault(season, []).extend(z)
+                # Split each team's win variance into single-game terms and between-game terms.
+                residual_sq, residual_sum, game_var = np.zeros(32), np.zeros(32), np.zeros(32)
+                for g, p in zip(left, result.home_win):
+                    o = 1.0 if g.result > 0 else 0.0 if g.result < 0 else 0.5
+                    for team, sign in ((INDEX[g.home], 1), (INDEX[g.away], -1)):
+                        residual_sq[team] += (o - p) ** 2
+                        residual_sum[team] += sign * (o - p)
+                        game_var[team] += p * (1 - p)
+                for i in range(32):
+                    for j in range(i + 1, 32):
+                        diff = result.wins[:, i] - result.wins[:, j]
+                        if diff.var() > 0:
+                            group = ("division rivals" if DIVISION_OF[TEAMS[i]] == DIVISION_OF[TEAMS[j]]
+                                     else "same conference" if CONFERENCE_OF[TEAMS[i]] == CONFERENCE_OF[TEAMS[j]]
+                                     else "other conference")
+                            pairs.setdefault(group, []).append(
+                                (actual[i] - actual[j] - diff.mean()) ** 2 / diff.var())
+                parts.append((residual_sq.sum(), game_var.sum(),
+                              (residual_sum ** 2 - residual_sq).sum(), (result.wins_var - game_var).sum()))
+        per_season = np.array([np.mean(v) for v in by_season.values()])
+        print(f"  x{factor:g}: mean z^2 {np.mean(z2):.3f}  (season-to-season range "
+              f"{per_season.min():.2f}-{per_season.max():.2f}, SE of mean ~{per_season.std() / np.sqrt(len(per_season)):.3f})")
+        a_single, m_single, a_between, m_between = np.array(parts).sum(axis=0)
+        print(f"    single-game terms: actual {a_single:.0f}, model {m_single:.0f}   "
+              f"between-game terms: actual {a_between:.0f}, model {m_between:.0f}")
+        print("    win differences, mean z^2: " + "   ".join(f"{g} {np.mean(v):.3f}" for g, v in sorted(pairs.items())))
+
+
 def log_losses(preds):
     p = np.clip(np.array([x for x, _, _ in preds]), 1e-4, 1 - 1e-4)
     y = np.array([o for _, o, _ in preds], float)
     return -(y * np.log(p) + (1 - y) * np.log(1 - p)), np.array([s for _, _, s in preds])
 
 
-def scale_test(seasons_games, rows, factors=(1.0, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0), sims=1500, resamples=2000):
+def scale_test(seasons_games, rows, factors=(1.0, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0), sims=1500, resamples=2000,
+               base=None):
     """Which multiple of the measured strength uncertainty predicts best, and how sure are we?
 
     Log loss is a proper scoring rule: it's minimized by the probabilities that match how
@@ -129,13 +191,19 @@ def scale_test(seasons_games, rows, factors=(1.0, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0
 def main(sims=2000):
     parser = argparse.ArgumentParser()
     parser.add_argument("--scale-test", action="store_true")
+    parser.add_argument("--win-totals", action="store_true")
+    parser.add_argument("--feedback", type=float, default=0.0, help="later lines react to results (0.061 measured)")
     args = parser.parse_args()
     path = data.latest_nflverse(data_dir())
     seasons_games = [load(path, s) for s in SEASONS]
     rows = load_rows(path)
+    if args.win_totals:
+        print(f"Remaining-win totals, {SEASONS.start}-{SEASONS.stop - 1}, from weeks {WEEKS}")
+        win_totals_test(seasons_games, base=Uncertainty(feedback=args.feedback))
+        return
     if args.scale_test:
         print(f"Strength-uncertainty factor, {SEASONS.start}-{SEASONS.stop - 1}, from weeks {WEEKS}")
-        scale_test(seasons_games, rows)
+        scale_test(seasons_games, rows, base=Uncertainty(feedback=args.feedback))
         return
     game_sigma_test(seasons_games)
     print(f"\nPlayoff predictions, {SEASONS.start}-{SEASONS.stop - 1}, from weeks {WEEKS}, {sims} sims each")
