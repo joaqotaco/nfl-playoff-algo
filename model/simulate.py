@@ -25,6 +25,10 @@ P_TIE = 8 / 2383
 MEAN_TOTAL = 45.0
 
 
+# Later lines move this many points per point a team beat its earlier lines (2015-2025).
+FEEDBACK = 0.061
+
+
 @dataclass(frozen=True)
 class Uncertainty:
     """How far future lines may stray from today's ratings, per team (points).
