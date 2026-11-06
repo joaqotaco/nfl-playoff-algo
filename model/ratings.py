@@ -21,7 +21,7 @@ from model import data
 
 STERN_SIGMA = 13.86
 HALF_LIVES = (1, 2, 4, 8, 16, None)  # None means every line counts equally
-DEFAULT_HALF_LIFE = 8  # chosen 2026-11-05; see the half-life test
+DEFAULT_HALF_LIFE = 2  # chosen 2026-11-05 from the 2015-2025 test in model/calibrate.py
 
 
 @dataclass(frozen=True)

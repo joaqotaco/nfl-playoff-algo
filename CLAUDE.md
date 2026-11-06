@@ -48,28 +48,28 @@ gap exceeds fees + model uncertainty, and score every hypothetical fill with mar
   7 per conference, P(division) <= P(playoffs).
 
 ## Model spec: status
-Agreed (2026-11-04):
+Agreed (2026-11-04/05):
 - Quantity: daily at T = 14:00 UTC, P(team is one of its conference's 7 seeds | info at T),
   as implied by game lines, with a band for model inputs and simulation error.
-- Random: game outcomes given strengths (incl. rare ties); team strength, drawn once per
-  simulated season; tiebreaker coin toss. Strength assumed fixed from T to season end.
+- Random: game outcomes given lines (incl. rare ties); how far each team's strength strays
+  from its rating (see strength uncertainty below); tiebreaker coin toss.
 - Conditioning: results final before T (standings, tiebreakers only), lines as of T,
   remaining schedule.
 - Ratings: line = r_home - r_away + home_field, weighted least squares, ratings average 0.
   Past games use nflverse spread_line; upcoming games use Kalshi spread strikes at T.
 - Settlement (contract terms read): clinched teams settle Yes early, eliminated settle No once
   reported; compare open contracts + clinched with 14. Forfeit/withdrawal settles No.
-
 - Game-margin SD: matched to Kalshi's spread strikes at T (decided 2026-11-05). Confirmed by
   2015-2025 game winners: SD 11-11.4 beats Stern's 13.86.
 - This week's games use the Kalshi line directly (decided 2026-11-05).
 - Tiebreakers: implemented and matching every 2002-2025 playoff field (model/validate.py).
+- Ratings: half-life 2 weeks; this week's Kalshi lines feed the ratings and are also used
+  directly for this week's games (decided 2026-11-05, evidence in model/calibrate.py).
+- Strength uncertainty: lasting + weekly drift + one-off game noise, measured from line
+  movements and scaled x2 (decided 2026-11-05). x1.75-x2.5 score about equally in the
+  2015-2025 backtest, so that range belongs in the band.
 
-Open decisions (evidence in model/calibrate.py and model/backtest.py):
-- Half-life: 8 chosen 2026-11-05 on 2026-only evidence; 2015-2025 favors 2 at every horizon.
-- Whether this week's Kalshi lines also feed the ratings (backtest favors yes).
-- Strength uncertainty: the spec's "fixed after T" vs measured lasting + drift + one-off,
-  scaled x2 so the 2015-2025 backtest is calibrated.
+Open decisions:
 - Fair-value band, paper-quote rule and size, markout scoring.
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
   later weeks.

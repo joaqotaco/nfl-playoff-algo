@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily fair values for the playoff and division contracts
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=collector
+WorkingDirectory=/opt/nfl-playoff-algo
+EnvironmentFile=/etc/nfl-collector.env
+Environment=COLLECTOR_DATA_DIR=/var/lib/nfl-collector
+# Uses the 14:00 collector round; --refresh downloads the latest nflverse results.
+ExecStart=/usr/bin/python3 -m model.fairvalue --refresh --sims 20000 --quiet
+ExecStartPost=-/usr/bin/curl -fsS -m 10 ${FAIRVALUE_HEALTHCHECK_URL}
+TimeoutStartSec=20min

@@ -1,0 +1,10 @@
+[Unit]
+Description=Compute fair values daily, after the 14:00 UTC collector round
+
+[Timer]
+OnCalendar=*-*-* 14:10:00 UTC
+# If the server was down at 14:10, run on boot; it still uses the 14:00 snapshot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

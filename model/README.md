@@ -50,3 +50,17 @@ python3 -m model.backtest         # about 2 minutes
 Game outcomes: the home margin is normal around the line, with the SD fitted to Kalshi's
 spread strikes at T (about 11.4). On 2,885 games from 2015-2025, an SD of 11-11.4 predicts
 winners from lines better than Stern's 13.86.
+
+## Daily job on the server
+
+`deploy/nfl-fairvalue.timer` runs `model.fairvalue` at 14:10 UTC with 20,000 simulations
+(about 6 seconds, 300 MB). It uses the 14:00 collector round and writes
+`/var/lib/nfl-collector/fairvalues/<T>-calibrated-hl2-k.csv`. It fails, and skips its
+healthcheck ping, if the snapshot is missing or nflverse lacks a result for a game played
+before T.
+
+Backfill every day since a date (days without a 14:00 round are listed as skipped):
+
+```sh
+sudo -u collector COLLECTOR_DATA_DIR=/var/lib/nfl-collector python3 -m model.fairvalue --since 2026-11-02 --refresh --quiet
+```
