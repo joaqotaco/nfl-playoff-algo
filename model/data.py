@@ -32,6 +32,8 @@ class Game:
     result: float | None  # home score minus away score; None until played
     home_score: float | None = None
     away_score: float | None = None
+    home_qb: str | None = None  # starting quarterback (nflverse), for diagnostics
+    away_qb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,8 @@ def load_games(path, season=SEASON):
                 result=float(row["result"]) if row["result"] else None,
                 home_score=float(row["home_score"]) if row["home_score"] else None,
                 away_score=float(row["away_score"]) if row["away_score"] else None,
+                home_qb=row.get("home_qb_name") or None,
+                away_qb=row.get("away_qb_name") or None,
             ))
     return games
 

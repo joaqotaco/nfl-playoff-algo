@@ -73,6 +73,12 @@ Agreed (2026-11-04/05):
   line), so a team's games are tied together; the simulation's drift ignored simulated
   results. With that feedback, x1.5 calibrates win totals and win differences. Adopted
   2026-11-06: feedback 0.061, central x1.5, band x1 to x2.
+  Follow-up (model/calibrate.py --news): QB changes move later lines (-1.74 pt when a
+  different QB starts) but are already inside the measured drift, so "news not in the
+  score" isn't the gap. The main shortfall is that simulated margins (SD 11.4) are
+  narrower than real ones (12.6), so blowouts and their feedback are too rare; feedback
+  0.075 fixes win totals at x1, yet playoff scoring still prefers x1.5. Kept the simpler
+  setup unchanged.
 
 - Next week's Kalshi moneylines become lines when no spread strikes are listed (2026-11-06).
 - Band: fair values across uncertainty x1 to x2 (with feedback), widened by 2 simulation SEs (2026-11-06).
