@@ -92,6 +92,10 @@ Agreed (2026-11-04/05):
   multiplier to 0 unless a series is listed under Non-Standard Fees, and KXNFLPLAYOFF isn't
   (the division, game, conference and Super Bowl series are, at 1 x 0.0175 x P(1-P)).
 
+- Real money (decided 2026-11-06): about $20, automated through the Kalshi API rather than
+  by hand. Start only after reviewing ~2 more game days of paper markouts. Design (key
+  storage, hard limits, demo first) to be approved before anything is built.
+
 Open decisions:
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
   later weeks.

@@ -14,8 +14,12 @@ Rules agreed 2026-11-06 (see CLAUDE.md), applied to each daily fair-value file a
 - Taker comparison: at the first snapshot after T + 10 min, cross the spread if the band
   still beats the price after the taker fee.
 - Markouts: mid and exit (sell at bid / buy at ask, after taker fee) at the first snapshot
-  1h and 24h after entry, and at 14:00 UTC the day after the next game day. A market that
-  has settled is marked at its payout.
+  1h and 24h after entry, at 14:00 UTC the day after the next game day, at the latest
+  snapshot, and at settlement. A market that has settled is marked at its payout.
+- Error bars treat each game day as one unit: fills before the same games share one
+  outcome, so counting them as independent would overstate certainty.
+- The report splits results by whether a trade agrees with the favorite-longshot bias:
+  buying a favorite (price >= 0.50) or selling a longshot (price < 0.50).
 
 Everything is recomputed from the fair-value CSVs, the collector's tidy.sqlite and the
 nflverse schedule, so the results can always be reproduced.
@@ -24,7 +28,6 @@ import argparse
 import csv
 import math
 import sqlite3
-import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,7 +43,7 @@ TICK = 0.01
 MAKER_FEE = 0.0
 CUSHION = MAKER_FEE + TICK
 QUOTE_DELAY = timedelta(minutes=10)
-HORIZONS = ("1h", "24h", "next game day")
+HORIZONS = ("1h", "24h", "next game day", "latest", "settlement")
 
 SCHEMA = """
 CREATE TABLE quotes (
@@ -54,7 +57,9 @@ CREATE TABLE takers (
 );
 CREATE TABLE markouts (
     kind TEXT, ref INTEGER, horizon TEXT, mark_time TEXT, mid REAL, exit REAL,
-    pnl_mid REAL, pnl_exit REAL
+    pnl_mid REAL, pnl_exit REAL,
+    side TEXT, price REAL,
+    game_day TEXT  -- ET date of the first game after entry: the unit for error bars
 );
 """
 
@@ -126,7 +131,10 @@ def iso(t):
 
 
 def mark(market, ticker, side, entry_time, entry_price, entry_fee, horizon_time):
-    """Mid and exit markouts per contract at the first snapshot at or after horizon_time."""
+    """Mid and exit markouts per contract at the first snapshot at or after horizon_time.
+
+    Returns (mark_time, mid, exit, pnl_mid, pnl_exit, settled) or None.
+    """
     snap = market.first_snapshot_after(horizon_time)
     if snap is None:
         return None
@@ -135,19 +143,20 @@ def mark(market, ticker, side, entry_time, entry_price, entry_fee, horizon_time)
         return None
     bid, ask, book_status, status, result = row
     direction = 1 if side == "bid" else -1  # long YES after a bid fills, short after an ask
-    if result in ("yes", "no"):
+    settled = result in ("yes", "no")
+    if settled:
         value = 1.0 if result == "yes" else 0.0
         mid = exit_price = value
         exit_fee = 0.0
     else:
         if bid is None or ask is None:
-            return snap.time, None, None, None, None
+            return snap.time, None, None, None, None, False
         mid = (bid + ask) / 2
         exit_price = bid if direction == 1 else ask
         exit_fee = taker_fee(exit_price)
     pnl_mid = direction * (mid - entry_price) - entry_fee
     pnl_exit = direction * (exit_price - entry_price) - entry_fee - exit_fee
-    return snap.time, mid, exit_price, pnl_mid, pnl_exit
+    return snap.time, mid, exit_price, pnl_mid, pnl_exit, settled
 
 
 def horizon_times(entry, kickoffs):
@@ -238,34 +247,76 @@ def build(base, out_path):
 
 
 def add_markouts(out, market, kind, ref, ticker, side, entry, price, fee, kickoffs):
-    for horizon, when in horizon_times(entry, kickoffs).items():
+    nxt = next((k for k in kickoffs if k > entry), entry)
+    game_day = nxt.astimezone(data.EASTERN).date().isoformat()
+    times = horizon_times(entry, kickoffs)
+    if market.snapshots and market.snapshots[-1].time > entry:
+        times["latest"] = market.snapshots[-1].time
+    for horizon, when in times.items():
         result = mark(market, ticker, side, entry, price, fee, when)
-        if result is not None:
-            mark_time, mid, exit_price, pnl_mid, pnl_exit = result
-            out.execute("INSERT INTO markouts VALUES (?,?,?,?,?,?,?,?)",
-                        (kind, ref, horizon, iso(mark_time), mid, exit_price, pnl_mid, pnl_exit))
+        if result is None:
+            continue
+        mark_time, mid, exit_price, pnl_mid, pnl_exit, settled = result
+        rows = [horizon] + (["settlement"] if horizon == "latest" and settled else [])
+        for name in rows:
+            out.execute("INSERT INTO markouts VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (kind, ref, name, iso(mark_time), mid, exit_price, pnl_mid, pnl_exit, side, price, game_day))
 
 
-def summary(values):
-    if not values:
-        return "    -"
-    mean = statistics.mean(values) * 100
-    if len(values) < 2:
-        return f"{mean:+5.1f}c (n=1)"
-    se = statistics.stdev(values) / math.sqrt(len(values)) * 100
-    return f"{mean:+5.1f}c +-{se:.1f} (n={len(values)})"
+def clustered_se(values, clusters):
+    """Standard error of the mean when results within a cluster share one outcome.
+
+    Sums deviations within each cluster first, so ten fills before the same games
+    count as roughly one piece of evidence, not ten.
+    """
+    groups = sorted(set(clusters))
+    if len(groups) < 2:
+        return None
+    mean = sum(values) / len(values)
+    sums = {g: 0.0 for g in groups}
+    for v, c in zip(values, clusters):
+        sums[c] += v - mean
+    g = len(groups)
+    return math.sqrt(g / (g - 1) * sum(x * x for x in sums.values())) / len(values)
+
+
+def summary(rows):
+    """rows: (value, cluster). Mean in cents with game-day error bars."""
+    if not rows:
+        return "-"
+    values = [v for v, _ in rows]
+    clusters = [c for _, c in rows]
+    mean = sum(values) / len(values) * 100
+    se = clustered_se(values, clusters)
+    error = f"+-{se * 100:.1f}" if se is not None else "+-?"
+    return f"{mean:+5.1f}c {error} (n={len(values)}, {len(set(clusters))} game days)"
+
+
+def agrees_with_longshot_bias(side, price):
+    """Favorites tend to be underpriced and longshots overpriced, so the bias favors
+    buying favorites and selling longshots."""
+    return (side == "bid" and price >= 0.5) or (side == "ask" and price < 0.5)
 
 
 def report(out):
     print("Quotes by status:", dict(out.execute("SELECT status, COUNT(*) FROM quotes GROUP BY status").fetchall()))
     print("Taker comparisons:", out.execute("SELECT COUNT(*) FROM takers").fetchone()[0])
-    print("\nMarkouts per contract, after fees (mean +- SE). Mid = information; exit = tradeable.")
+    print("\nMarkouts per contract, after fees (mean +- SE by game day).")
+    print("Mid = did the price move our way; exit = closing out by crossing the spread.")
     for kind in ("quote", "taker"):
         for horizon in HORIZONS:
-            rows = out.execute("SELECT pnl_mid, pnl_exit FROM markouts WHERE kind = ? AND horizon = ? "
+            rows = out.execute("SELECT pnl_mid, pnl_exit, game_day FROM markouts WHERE kind = ? AND horizon = ? "
                                "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
-            print(f"  {kind:5s} {horizon:14s} mid {summary([r[0] for r in rows]):24s} "
-                  f"exit {summary([r[1] for r in rows])}")
+            print(f"  {kind:5s} {horizon:14s} mid {summary([(r[0], r[2]) for r in rows]):36s} "
+                  f"exit {summary([(r[1], r[2]) for r in rows])}")
+    print("\nBy favorite-longshot bias (mid markouts): agrees = buying a favorite or selling a longshot.")
+    for kind in ("quote", "taker"):
+        for horizon in HORIZONS:
+            rows = out.execute("SELECT pnl_mid, game_day, side, price FROM markouts WHERE kind = ? AND horizon = ? "
+                               "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
+            agree = [(r[0], r[1]) for r in rows if agrees_with_longshot_bias(r[2], r[3])]
+            against = [(r[0], r[1]) for r in rows if not agrees_with_longshot_bias(r[2], r[3])]
+            print(f"  {kind:5s} {horizon:14s} agrees {summary(agree):36s} against {summary(against)}")
     print("\nLatest quotes:")
     for row in out.execute("SELECT t, team, side, price, round(fair, 3), round(band_low, 2), round(band_high, 2), "
                            "book_bid, book_ask, status FROM quotes ORDER BY t DESC, team LIMIT 15"):
