@@ -55,7 +55,7 @@ winners from lines better than Stern's 13.86.
 
 `deploy/nfl-fairvalue.timer` runs `model.fairvalue` at 14:10 UTC with 20,000 simulations
 per setting (about 20 seconds, 300 MB). Each team gets a band: the lowest and highest fair
-value across uncertainty x1 and x2.5, widened by 2 simulation standard errors. It uses the 14:00 collector round and writes
+value across uncertainty x1 and x2 (with result feedback), widened by 2 simulation standard errors. It uses the 14:00 collector round and writes
 `/var/lib/nfl-collector/fairvalues/<T>-calibrated-hl2-k.csv`. It fails, and skips its
 healthcheck ping, if the snapshot is missing or nflverse lacks a result for a game played
 before T.
@@ -68,3 +68,9 @@ sudo -u collector COLLECTOR_DATA_DIR=/var/lib/nfl-collector python3 -m model.fai
 
 Next week's moneyline-only games (no spread strikes listed yet) become lines too, as sigma
 times the inverse normal of P(home wins). `--no-moneylines` turns this off.
+
+Strength uncertainty: each team's error is a lasting part plus weekly drift plus one-off game
+noise (measured from 2015-2025 line movements), scaled x1.5. Later lines also react to
+simulated results: 0.061 points per point a team beat its line. Without that feedback a
+team's games were far less tied together than in reality (`python3 -m model.backtest
+--win-totals --feedback 0.061`).

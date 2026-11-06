@@ -8,7 +8,7 @@
 Defaults are the decisions of 2026-11-05/06: half-life 2 weeks; Kalshi lines at T (from spread
 strikes, or from moneylines for games with no strikes yet) feed the ratings, so lasting news
 such as a season-ending injury reaches later weeks, and are used directly for their games;
-calibrated strength uncertainty; band across x1 to x2.5.
+strength uncertainty with result feedback at x1.5; band across x1 to x2.
 """
 import argparse
 import csv
@@ -23,18 +23,21 @@ from collector.round import data_dir
 from model import data
 from model.league import CONFERENCE_OF, TEAMS, division_ticker, playoff_ticker
 from model.ratings import DEFAULT_HALF_LIFE, fit, lines_at, past_lines
-from model.simulate import Uncertainty, build_schedule, simulate
+from model.simulate import FEEDBACK, Uncertainty, build_schedule, simulate
 
-# The band: fair values across these multiples of the measured uncertainty, widened by
-# BAND_SE simulation standard errors. x1 is what every component test supports, x2.5 the top
-# of what the 2015-2025 season backtest supports (decided 2026-11-06).
-BAND_FACTORS = (1.0, 2.5)
+# Central setting and band (decided 2026-11-06): later lines react to simulated results
+# (FEEDBACK), and the measured uncertainty is scaled x1.5, which calibrates 2015-2025 win
+# totals and win differences. The band spans x1 to x2 (just either side of calibrated),
+# widened by BAND_SE simulation standard errors.
+CENTRAL = Uncertainty(feedback=FEEDBACK).scaled(1.5)
+BAND_FACTORS = (1.0, 2.0)
 BAND_SE = 2
 
 UNCERTAINTY = {
     "measured": Uncertainty(),  # lasting + drift + one-off, from model/calibrate.py
     # Measured x2: the factor that makes 2015-2025 playoff predictions calibrated (model/backtest.py).
-    "calibrated": Uncertainty().scaled(2.0),
+    "calibrated": CENTRAL,
+    "x2-no-feedback": Uncertainty().scaled(2.0),  # the previous central setting
     "fixed": Uncertainty.fixed(2.7),  # strength fixed after T, one draw per season
     "none": Uncertainty.fixed(0.0),
 }
@@ -80,8 +83,8 @@ def run(at, args, base, path, games, out=print):
     schedule = build_schedule(games, at, ratings, {(k.home, k.away, k.gameday): k.line for k in kalshi})
     taus = args.uncertainty or ["calibrated"]
     results = {tau: simulate(schedule, sigma, UNCERTAINTY[tau], args.sims, args.seed) for tau in taus}
-    band_runs = [results[taus[0]]] + [simulate(schedule, sigma, Uncertainty().scaled(f), args.sims, args.seed)
-                                      for f in BAND_FACTORS]
+    band_runs = [results[taus[0]]] + [simulate(schedule, sigma, Uncertainty(feedback=FEEDBACK).scaled(f),
+                                               args.sims, args.seed) for f in BAND_FACTORS]
 
     out(f"T = {at:%Y-%m-%d %H:%M} UTC   Kalshi snapshot {slot}   nflverse {path.name}")
     out(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines, "

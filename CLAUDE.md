@@ -71,11 +71,11 @@ Agreed (2026-11-04/05):
   model/backtest.py --win-totals): errors are NOT linked between teams beyond what the
   schedule implies. The real gap: lines react to results (0.061 pt per point a team beats its
   line), so a team's games are tied together; the simulation's drift ignored simulated
-  results. With that feedback, x1.5 calibrates win totals and win differences. Pending
-  decision: adopt feedback 0.061 + x1.5 (and pick the band around it).
+  results. With that feedback, x1.5 calibrates win totals and win differences. Adopted
+  2026-11-06: feedback 0.061, central x1.5, band x1 to x2.
 
 - Next week's Kalshi moneylines become lines when no spread strikes are listed (2026-11-06).
-- Band: fair values across uncertainty x1 to x2.5, widened by 2 simulation SEs (2026-11-06).
+- Band: fair values across uncertainty x1 to x2 (with feedback), widened by 2 simulation SEs (2026-11-06).
 - Paper quotes (agreed 2026-11-06, not built yet): playoff contracts only, 1 contract.
   Quote only when the band excludes the market: bid if band low > best ask, ask if band
   high < best bid. Price = best bid + 1c (or best ask - 1c), never past band edge minus a
