@@ -1,11 +1,13 @@
 """Score the whole model on past seasons: simulate from the start of weeks 6, 9, 12 and
 15, then compare P(playoffs) with who actually made it.
 
-    python3 -m model.backtest
+    python3 -m model.backtest                 compare model setups
+    python3 -m model.backtest --scale-test    choose the strength-uncertainty factor
 
 nflverse closing lines stand in for Kalshi's lines at T for that week's games. Also
 checks which game-outcome spread (sigma) best predicts real game winners from lines.
 """
+import argparse
 import math
 
 import numpy as np
@@ -65,13 +67,13 @@ def predictions(seasons_games, rows, config, sims):
             result = simulate(schedule, config["sigma"], config["uncertainty"], sims,
                               seed=season * 100 + week, wild_cards=wild_cards(season))
             p = result.probability(result.playoffs)
-            out += [(p[INDEX[t]], t in made) for t in TEAMS]
+            out += [(p[INDEX[t]], t in made, season) for t in TEAMS]
     return out
 
 
 def score(preds):
-    p = np.clip(np.array([x for x, _ in preds]), 1e-4, 1 - 1e-4)
-    y = np.array([o for _, o in preds], float)
+    p = np.clip(np.array([x for x, _, _ in preds]), 1e-4, 1 - 1e-4)
+    y = np.array([o for _, o, _ in preds], float)
     brier = np.mean((p - y) ** 2)
     log_loss = -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
     buckets = []
@@ -82,10 +84,59 @@ def score(preds):
     return brier, log_loss, buckets
 
 
+def log_losses(preds):
+    p = np.clip(np.array([x for x, _, _ in preds]), 1e-4, 1 - 1e-4)
+    y = np.array([o for _, o, _ in preds], float)
+    return -(y * np.log(p) + (1 - y) * np.log(1 - p)), np.array([s for _, _, s in preds])
+
+
+def scale_test(seasons_games, rows, factors=(1.0, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0), sims=1500, resamples=2000):
+    """Which multiple of the measured strength uncertainty predicts best, and how sure are we?
+
+    Log loss is a proper scoring rule: it's minimized by the probabilities that match how
+    often things actually happen, so the best factor is the most honest uncertainty.
+    """
+    base = Uncertainty()
+    by_factor = {}
+    for factor in factors:
+        config = dict(half_life=2, use_current=True, uncertainty=base.scaled(factor), sigma=11.4)
+        losses, seasons = log_losses(predictions(seasons_games, rows, config, sims))
+        by_factor[factor] = losses
+        print(f"  x{factor:<5g} log loss {losses.mean():.4f}")
+    names = list(SEASONS)
+    per_season = np.array([[by_factor[f][seasons == s].mean() for s in names] for f in factors])
+
+    # Leave one season out: pick the factor on the other seasons, score the held-out one.
+    held_out, picks = [], []
+    for k in range(len(names)):
+        others = np.delete(per_season, k, axis=1).mean(axis=1)
+        best = int(np.argmin(others))
+        picks.append(factors[best])
+        held_out.append(per_season[best, k])
+    print(f"  leave one season out: picked {picks}")
+    print(f"    held-out log loss {np.mean(held_out):.4f} vs x1 {per_season[0].mean():.4f}")
+
+    # Resample whole seasons: how often is each factor the best?
+    rng = np.random.default_rng(0)
+    wins = np.zeros(len(factors))
+    for _ in range(resamples):
+        sample = rng.integers(0, len(names), len(names))
+        wins[np.argmin(per_season[:, sample].mean(axis=1))] += 1
+    print("  best factor across resampled seasons: "
+          + ", ".join(f"x{f:g} {w / resamples:.0%}" for f, w in zip(factors, wins)))
+
+
 def main(sims=2000):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scale-test", action="store_true")
+    args = parser.parse_args()
     path = data.latest_nflverse(data_dir())
     seasons_games = [load(path, s) for s in SEASONS]
     rows = load_rows(path)
+    if args.scale_test:
+        print(f"Strength-uncertainty factor, {SEASONS.start}-{SEASONS.stop - 1}, from weeks {WEEKS}")
+        scale_test(seasons_games, rows)
+        return
     game_sigma_test(seasons_games)
     print(f"\nPlayoff predictions, {SEASONS.start}-{SEASONS.stop - 1}, from weeks {WEEKS}, {sims} sims each")
     for name, config in CONFIGS.items():

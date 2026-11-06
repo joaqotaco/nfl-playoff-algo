@@ -20,7 +20,7 @@ fi
 
 install -m 644 "$APP_DIR"/deploy/nfl-*.service "$APP_DIR"/deploy/nfl-*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now nfl-collector.timer
+systemctl enable --now nfl-collector.timer nfl-fairvalue.timer
 
-echo "Collector timer is on."
+echo "Collector and fair-value timers are on."
 echo "Then fill in $ENV_FILE and run: systemctl enable --now nfl-backup.timer"

@@ -2,14 +2,17 @@
 
     python3 -m model.fairvalue                          at the latest 14:00 UTC
     python3 -m model.fairvalue --at 2026-11-05T04:30:00Z --sims 20000
-    python3 -m model.fairvalue --half-life 2 --ratings-use-kalshi --uncertainty measured
+    python3 -m model.fairvalue --uncertainty measured --uncertainty calibrated
+    python3 -m model.fairvalue --since 2026-11-02 --quiet  backfill every 14:00 UTC since then
 
-Upcoming games with a Kalshi line always use that line directly. --ratings-use-kalshi
-also feeds those lines into the ratings, so lasting news (a season-ending injury)
-reaches later weeks too.
+Defaults are the decisions of 2026-11-05: half-life 2 weeks, this week's Kalshi lines in
+the ratings (so lasting news such as a season-ending injury reaches later weeks) and also
+used directly for this week's games, calibrated strength uncertainty.
 """
 import argparse
 import csv
+import sys
+from datetime import timedelta
 import sqlite3
 import statistics
 
@@ -62,31 +65,17 @@ def cents(x):
     return "  -" if x is None else f"{x * 100:3.0f}"
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--at", type=data.parse_time)
-    parser.add_argument("--sims", type=int, default=10000)
-    parser.add_argument("--uncertainty", choices=UNCERTAINTY, action="append")
-    parser.add_argument("--half-life", type=float, default=DEFAULT_HALF_LIFE)
-    parser.add_argument("--ratings-use-kalshi", action="store_true")
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
-
-    base = data_dir()
-    path = data.fetch_nflverse(base) if args.refresh else (data.latest_nflverse(base) or data.fetch_nflverse(base))
-    games = data.load_games(path)
-    at = args.at or data.default_at()
+def run(at, args, base, path, games, out=print):
     slot, kalshi = data.kalshi_lines(base / "tidy.sqlite", at, games)
     sigma = market_sigma(kalshi)
     rating_lines = lines_at(games, at, kalshi) if args.ratings_use_kalshi else past_lines(games, at)
     ratings = fit(rating_lines, at, args.half_life)
     schedule = build_schedule(games, at, ratings, {(k.home, k.away, k.gameday): k.line for k in kalshi})
-    taus = args.uncertainty or ["fixed"]
+    taus = args.uncertainty or ["calibrated"]
     results = {tau: simulate(schedule, sigma, UNCERTAINTY[tau], args.sims, args.seed) for tau in taus}
 
-    print(f"T = {at:%Y-%m-%d %H:%M} UTC   Kalshi snapshot {slot}   nflverse {path.name}")
-    print(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines)   "
+    out(f"T = {at:%Y-%m-%d %H:%M} UTC   Kalshi snapshot {slot}   nflverse {path.name}")
+    out(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines)   "
           f"sigma {sigma:.2f} (median of Kalshi strike fits)   half-life {args.half_life:g} wk   "
           f"home field {ratings.home_field:+.2f}   sims {args.sims}   "
           f"ratings use Kalshi: {'yes' if args.ratings_use_kalshi else 'no'}")
@@ -100,7 +89,7 @@ def main():
     se = main.standard_error(main.playoffs)
 
     tau_cols = "".join(f"  {t:>9s}" for t in taus)
-    print(f"\n{'team':5s}{'rating':>7s}   P(playoffs) +-SE{tau_cols}   Kalshi bid/ask       P(div)  div bid/ask")
+    out(f"\n{'team':5s}{'rating':>7s}   P(playoffs) +-SE{tau_cols}   Kalshi bid/ask       P(div)  div bid/ask")
     order = sorted(range(32), key=lambda i: (CONFERENCE_OF[TEAMS[i]], -p_playoff[i]))
     rows = []
     for i in order:
@@ -111,7 +100,7 @@ def main():
         flag = verdict(p_playoff[i], bid, ask)
         dflag = verdict(p_division[i], dbid, dask)
         note = "" if status in (None, "active") else f" [{status}]"
-        print(f"{team:5s}{ratings.ratings[team]:+7.2f}   {p_playoff[i]:6.3f} {se[i]:.3f}  {by_tau}   "
+        out(f"{team:5s}{ratings.ratings[team]:+7.2f}   {p_playoff[i]:6.3f} {se[i]:.3f}  {by_tau}   "
               f"{cents(bid)} {cents(ask)}  {flag:11s}   {p_division[i]:6.3f}  {cents(dbid)} {cents(dask)}  {dflag}{note}")
         rows.append({"team": team, "conference": CONFERENCE_OF[team], "rating": ratings.ratings[team],
                      "p_playoffs": p_playoff[i], "se": se[i], "p_division": p_division[i],
@@ -120,23 +109,57 @@ def main():
     mids = [(p_playoff[i], playoff[playoff_ticker(TEAMS[i])]) for i in range(32)]
     outside = sum(bool(verdict(p, b, a)) for p, (_, b, a, _) in mids)
     gaps = [abs(p - (b + a) / 2) for p, (_, b, a, _) in mids if b is not None and a is not None]
-    print(f"\nvs Kalshi playoff book: {outside} of 32 outside bid/ask, "
+    out(f"\nvs Kalshi playoff book: {outside} of 32 outside bid/ask, "
           f"mean |model - mid| {np.mean(gaps) * 100:.1f} points (mids only for this summary)")
     bids = [b for _, (_, b, _, _) in playoff.items() if b is not None]
     asks = [a for _, (_, _, a, _) in playoff.items() if a is not None]
-    print(f"\nKalshi playoff book: sum of bids {sum(bids):.2f} ({len(bids)} teams), "
+    out(f"\nKalshi playoff book: sum of bids {sum(bids):.2f} ({len(bids)} teams), "
           f"sum of asks {sum(asks):.2f} ({len(asks)} teams); model sums to {p_playoff.sum():.2f}")
 
-    out = base / "fairvalues"
-    out.mkdir(exist_ok=True)
-    out_path = out / f"{at:%Y%m%dT%H%MZ}-{main_tau}-hl{args.half_life:g}{'-k' if args.ratings_use_kalshi else ''}.csv"
+    out_dir = base / "fairvalues"
+    out_dir.mkdir(exist_ok=True)
+    out_path = out_dir / f"{at:%Y%m%dT%H%MZ}-{main_tau}-hl{args.half_life:g}{'-k' if args.ratings_use_kalshi else ''}.csv"
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]) + ["sigma", "tau", "half_life", "sims", "slot"])
         writer.writeheader()
         for row in rows:
             writer.writerow({**row, "sigma": sigma, "tau": main_tau, "half_life": args.half_life,
                              "sims": args.sims, "slot": slot})
-    print(f"saved {out_path}")
+    out(f"saved {out_path}")
+    return out_path
+
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--at", type=data.parse_time)
+    parser.add_argument("--since", type=data.parse_time, help="backfill each 14:00 UTC from this date")
+    parser.add_argument("--sims", type=int, default=10000)
+    parser.add_argument("--uncertainty", choices=UNCERTAINTY, action="append")
+    parser.add_argument("--half-life", type=float, default=DEFAULT_HALF_LIFE)
+    parser.add_argument("--ratings-exclude-kalshi", dest="ratings_use_kalshi", action="store_false")
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--quiet", action="store_true", help="only print where results are saved")
+    args = parser.parse_args()
+
+    base = data_dir()
+    path = data.fetch_nflverse(base) if args.refresh else (data.latest_nflverse(base) or data.fetch_nflverse(base))
+    games = data.load_games(path)
+    out = (lambda line: line.startswith("saved") and print(line)) if args.quiet else print
+    if not args.since:
+        run(args.at or data.default_at(), args, base, path, games, out)
+        return
+
+    at, last, failed = args.since.replace(hour=14, minute=0, second=0, microsecond=0), data.default_at(), 0
+    while at <= last:
+        try:
+            run(at, args, base, path, games, out)
+        except (LookupError, ValueError) as error:
+            failed += 1
+            print(f"{at:%Y-%m-%d %H:%M} skipped: {error}")
+        at += timedelta(days=1)
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":
