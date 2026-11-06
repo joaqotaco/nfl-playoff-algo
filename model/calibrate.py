@@ -3,6 +3,7 @@ nflverse lines in past seasons.
 
     python3 -m model.calibrate            half-life test and uncertainty estimates
     python3 -m model.calibrate --linked   are rating errors linked between teams?
+    python3 -m model.calibrate --news     which links tie a team's games together (QB changes)?
 
 1. Half-life test pooled over seasons: fit on lines before week k, predict the lines
    h weeks ahead. Lower RMSE is better.
@@ -78,6 +79,10 @@ def main():
     import sys
     path = data.latest_nflverse(data_dir())
     seasons_games = [load(path, s) for s in SEASONS]
+    if "--news" in sys.argv:
+        print(f"Where do a team's later surprises come from? {SEASONS.start}-{SEASONS.stop - 1}, weeks 6-15")
+        news_links(seasons_games)
+        return
     if "--linked" in sys.argv:
         print(f"Are rating errors linked between teams? {SEASONS.start}-{SEASONS.stop - 1}, weeks 6-15")
         linked_errors(seasons_games)
@@ -165,6 +170,83 @@ def linked_errors(seasons_games, model_sims=400, resamples=2000, seed=0):
     for i, name in enumerate(names):
         a, m = actual[:, i].mean(), model[:, i].mean()
         print(f"  {name:32s} actual {a:6.2f}  model {m:6.2f}  ratio {a / m:5.2f}  (90% range {low[i]:.2f}-{high[i]:.2f})")
+
+
+
+def news_links(seasons_games, sim_sigma=11.4):
+    """Where do a team's later surprises come from? Splits the covariance between an earlier
+    game i and a later game j of the same team (relative to the forecast at T) into four links,
+    in points squared per pair, and compares with what the simulation assumes. Then checks how
+    much quarterback changes (news that isn't in the score) drive later line moves.
+    """
+    from model.ratings import Line
+    from model.simulate import FEEDBACK, Uncertainty
+
+    u = Uncertainty()
+    links = collections.defaultdict(lambda: collections.defaultdict(list))
+    model_gap_gap, margin_noise = [], []
+    X, Y = [], []  # regression of later line gaps on (score surprise so far, QB change)
+    for games in seasons_games:
+        weeks = sorted({g.week for g in games if g.spread_line is not None})
+        for k in (w for w in weeks if 6 <= w <= 15):
+            current = [g for g in games if g.week == k and g.spread_line is not None]
+            at = min(g.kickoff for g in current)
+            fitted = fit(past_lines(games, at) + [Line(g.home, g.away, g.neutral, g.spread_line, g.kickoff, "c")
+                                                  for g in current], at, 2)
+            window = sorted([g for g in games if 0 <= g.week - k <= 8 and g.spread_line is not None
+                             and g.result is not None], key=lambda g: g.week)
+            for team in {t for g in window for t in (g.home, g.away)}:
+                before = [g for g in games if g.week < k and team in (g.home, g.away) and g.result is not None]
+                if not before:
+                    continue
+                last = max(before, key=lambda g: g.week)
+                qb_at_t = last.home_qb if last.home == team else last.away_qb
+                rows = []
+                for g in (g for g in window if team in (g.home, g.away)):
+                    sign = 1 if g.home == team else -1
+                    qb = g.home_qb if sign == 1 else g.away_qb
+                    gap = sign * (g.spread_line - predict(fitted, g.home, g.away, g.neutral))
+                    rows.append((g.week, gap, sign * (g.result - g.spread_line), qb != qb_at_t))
+                changed = any(r[3] for r in rows)
+                surprise = 0.0
+                for i, (week_i, gap_i, e_i, _) in enumerate(rows):
+                    margin_noise.append(e_i * e_i)
+                    if week_i > k:
+                        X.append((surprise, float(rows[i][3]), 1.0))
+                        Y.append(gap_i)
+                    surprise += e_i
+                    for week_j, gap_j, e_j, _ in rows[i + 1:]:
+                        group = links["QB changed" if changed else "same QB"]
+                        group["line move -> line move"].append(gap_i * gap_j)
+                        group["result -> line move"].append(e_i * gap_j)
+                        group["line move -> result"].append(gap_i * e_j)
+                        group["result -> result"].append(e_i * e_j)
+                        group["pairs"].append(1)
+                        s_i, s_j = max(week_i - k - 1, 0), max(week_j - k - 1, 0)
+                        model_gap_gap.append(u.lasting_sd ** 2 + u.drift_sd ** 2 * min(s_i, s_j))
+
+    names = ["line move -> line move", "result -> line move", "line move -> result", "result -> result"]
+    model = {names[0]: np.mean(model_gap_gap), names[1]: FEEDBACK * sim_sigma ** 2, names[2]: 0.0, names[3]: 0.0}
+    every = {n: sum((links[g][n] for g in links), []) for n in names}
+    share = len(links["QB changed"]["pairs"]) / sum(len(links[g]["pairs"]) for g in links)
+    print(f"  covariance per pair of a team's games (points^2); {share:.0%} of pairs are in windows with a QB change")
+    print(f"  {'link':24s} {'actual':>8s} {'+-':>5s} {'model x1':>9s} {'x1.5':>6s}   {'same QB':>8s} {'QB changed':>10s}")
+    for n in names:
+        v = np.array(every[n])
+        scale = 2.25 if n == names[0] else 1.0
+        print(f"  {n:24s} {v.mean():8.2f} {v.std() / np.sqrt(len(v)):5.2f} {model[n]:9.2f} {model[n] * scale:6.2f}   "
+              f"{np.mean(links['same QB'][n]):8.2f} {np.mean(links['QB changed'][n]):10.2f}")
+    print(f"  real margin noise around closing lines: SD {np.sqrt(np.mean(margin_noise)):.2f}; "
+          f"the simulation uses {sim_sigma}")
+
+    X, Y = np.array(X), np.array(Y)
+    coef, *_ = np.linalg.lstsq(X, Y, rcond=None)
+    only_score, *_ = np.linalg.lstsq(X[:, [0, 2]], Y, rcond=None)
+    r2 = 1 - np.var(Y - X @ coef) / np.var(Y)
+    r2_score = 1 - np.var(Y - X[:, [0, 2]] @ only_score) / np.var(Y)
+    print(f"  later line gap = {coef[0]:.3f} x score surprise so far + {coef[1]:+.2f} if a different QB starts")
+    print(f"    explained: {r2_score:.1%} by score surprises, {r2:.1%} adding QB changes "
+          f"({np.mean(X[:, 1]):.1%} of later games have a different QB than at T)")
 
 
 if __name__ == "__main__":
