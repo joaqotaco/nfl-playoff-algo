@@ -24,6 +24,11 @@ from model.league import CONFERENCE_OF, TEAMS, division_ticker, playoff_ticker
 from model.ratings import DEFAULT_HALF_LIFE, fit, lines_at, past_lines
 from model.simulate import Uncertainty, build_schedule, simulate
 
+# The band: fair values across these multiples of the measured uncertainty (the range the
+# 2015-2025 backtest can't tell apart), widened by BAND_SE simulation standard errors.
+BAND_FACTORS = (1.75, 2.5)
+BAND_SE = 2
+
 UNCERTAINTY = {
     "measured": Uncertainty(),  # lasting + drift + one-off, from model/calibrate.py
     # Measured x2: the factor that makes 2015-2025 playoff predictions calibrated (model/backtest.py).
@@ -66,16 +71,19 @@ def cents(x):
 
 
 def run(at, args, base, path, games, out=print):
-    slot, kalshi = data.kalshi_lines(base / "tidy.sqlite", at, games)
+    slot, kalshi = data.kalshi_lines(base / "tidy.sqlite", at, games, use_moneylines=args.moneylines)
     sigma = market_sigma(kalshi)
     rating_lines = lines_at(games, at, kalshi) if args.ratings_use_kalshi else past_lines(games, at)
     ratings = fit(rating_lines, at, args.half_life)
     schedule = build_schedule(games, at, ratings, {(k.home, k.away, k.gameday): k.line for k in kalshi})
     taus = args.uncertainty or ["calibrated"]
     results = {tau: simulate(schedule, sigma, UNCERTAINTY[tau], args.sims, args.seed) for tau in taus}
+    band_runs = [results[taus[0]]] + [simulate(schedule, sigma, Uncertainty().scaled(f), args.sims, args.seed)
+                                      for f in BAND_FACTORS]
 
     out(f"T = {at:%Y-%m-%d %H:%M} UTC   Kalshi snapshot {slot}   nflverse {path.name}")
-    out(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines)   "
+    out(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines, "
+        f"{sum(k.from_moneyline for k in kalshi)} from moneylines)   "
           f"sigma {sigma:.2f} (median of Kalshi strike fits)   half-life {args.half_life:g} wk   "
           f"home field {ratings.home_field:+.2f}   sims {args.sims}   "
           f"ratings use Kalshi: {'yes' if args.ratings_use_kalshi else 'no'}")
@@ -88,8 +96,16 @@ def run(at, args, base, path, games, out=print):
     p_division = main.probability(main.division)
     se = main.standard_error(main.playoffs)
 
+    def band(field):
+        probs = np.array([r.probability(getattr(r, field)) for r in band_runs])
+        error = BAND_SE * np.max([r.standard_error(getattr(r, field)) for r in band_runs], axis=0)
+        return np.clip(probs.min(0) - error, 0, 1), np.clip(probs.max(0) + error, 0, 1)
+
+    play_low, play_high = band("playoffs")
+    div_low, div_high = band("division")
+
     tau_cols = "".join(f"  {t:>9s}" for t in taus)
-    out(f"\n{'team':5s}{'rating':>7s}   P(playoffs) +-SE{tau_cols}   Kalshi bid/ask       P(div)  div bid/ask")
+    out(f"\n{'team':5s}{'rating':>7s}   P(playoffs)   band{tau_cols}   Kalshi bid/ask       P(div)  div bid/ask")
     order = sorted(range(32), key=lambda i: (CONFERENCE_OF[TEAMS[i]], -p_playoff[i]))
     rows = []
     for i in order:
@@ -100,10 +116,12 @@ def run(at, args, base, path, games, out=print):
         flag = verdict(p_playoff[i], bid, ask)
         dflag = verdict(p_division[i], dbid, dask)
         note = "" if status in (None, "active") else f" [{status}]"
-        out(f"{team:5s}{ratings.ratings[team]:+7.2f}   {p_playoff[i]:6.3f} {se[i]:.3f}  {by_tau}   "
+        out(f"{team:5s}{ratings.ratings[team]:+7.2f}   {p_playoff[i]:6.3f}  {play_low[i]:.2f}-{play_high[i]:.2f}{by_tau}   "
               f"{cents(bid)} {cents(ask)}  {flag:11s}   {p_division[i]:6.3f}  {cents(dbid)} {cents(dask)}  {dflag}{note}")
         rows.append({"team": team, "conference": CONFERENCE_OF[team], "rating": ratings.ratings[team],
-                     "p_playoffs": p_playoff[i], "se": se[i], "p_division": p_division[i],
+                     "p_playoffs": p_playoff[i], "se": se[i],
+                     "p_playoffs_low": play_low[i], "p_playoffs_high": play_high[i],
+                     "p_division": p_division[i], "p_division_low": div_low[i], "p_division_high": div_high[i],
                      "playoff_bid": bid, "playoff_ask": ask, "division_bid": dbid, "division_ask": dask})
 
     mids = [(p_playoff[i], playoff[playoff_ticker(TEAMS[i])]) for i in range(32)]
@@ -139,6 +157,8 @@ def main():
     parser.add_argument("--half-life", type=float, default=DEFAULT_HALF_LIFE)
     parser.add_argument("--ratings-exclude-kalshi", dest="ratings_use_kalshi", action="store_false")
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--moneylines", action="store_true",
+                        help="also use moneyline-only games (next week) as Kalshi lines")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--quiet", action="store_true", help="only print where results are saved")
     args = parser.parse_args()

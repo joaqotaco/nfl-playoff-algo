@@ -42,6 +42,7 @@ class KalshiLine:
     line: float  # median home margin implied by the spread strikes
     sigma: float | None  # spread of a normal fitted to all strikes
     home_win_prob: float | None  # KXNFLGAME mid for the home team
+    from_moneyline: bool = False  # no spread strikes listed yet; line backed out of the moneyline
 
 
 def fetch_nflverse(data_dir):
@@ -122,11 +123,13 @@ def snapshot_round(db, at):
     return row
 
 
-def kalshi_lines(db_path, at, games):
+def kalshi_lines(db_path, at, games, use_moneylines=False):
     """Kalshi lines for games kicking off after T, from the order books at T.
 
-    Uses mids, which is fine for estimating a line. Trading comparisons use bids
-    and asks instead.
+    Lines come from the spread strikes. With use_moneylines, games that only have a
+    moneyline so far (usually next week's) get line = sigma * inverse_Phi(P(home wins)),
+    with sigma the median strike fit of the other games. Uses mids, which is fine for
+    estimating a line. Trading comparisons use bids and asks instead.
     """
     db = sqlite3.connect(db_path)
     round_id, slot = snapshot_round(db, at)
@@ -156,22 +159,29 @@ def kalshi_lines(db_path, at, games):
 
     upcoming = {(g.kickoff.astimezone(EASTERN).strftime("%y%b%d").upper(), frozenset((g.home, g.away))): g
                 for g in games if g.kickoff > at}
-    lines = []
+    lines, moneyline_only = [], []
     for (date, _pair), entry in by_game.items():
         teams = {team for team, _, _ in entry["spread"]} | set(entry["win"])
         game = upcoming.get((date, frozenset(teams)))
         if game is None:
             continue
+        gameday = game.kickoff.astimezone(EASTERN).strftime("%Y-%m-%d")
         # A home strike k gives P(margin > k); an away strike k gives P(margin < -k).
         points = [(k, p) if team == game.home else (-k, 1 - p) for team, k, p in entry["spread"]]
         line = median_margin(points)
-        if line is None:
-            continue
-        lines.append(KalshiLine(
-            home=game.home, away=game.away,
-            gameday=game.kickoff.astimezone(EASTERN).strftime("%Y-%m-%d"),
-            line=line, sigma=fitted_sigma(points), home_win_prob=entry["win"].get(game.home),
-        ))
+        if line is not None:
+            lines.append(KalshiLine(game.home, game.away, gameday, line, fitted_sigma(points),
+                                    entry["win"].get(game.home)))
+        elif not entry["spread"] and game.home in entry["win"]:
+            moneyline_only.append((game, gameday, entry["win"][game.home]))
+
+    sigmas = [k.sigma for k in lines if k.sigma]
+    if use_moneylines and moneyline_only and sigmas:
+        sigma = sorted(sigmas)[len(sigmas) // 2]
+        for game, gameday, p in moneyline_only:
+            p = min(max(p, MIN_STRIKE_PROB), 1 - MIN_STRIKE_PROB)
+            lines.append(KalshiLine(game.home, game.away, gameday, sigma * NormalDist().inv_cdf(p),
+                                    None, p, from_moneyline=True))
     return slot, lines
 
 

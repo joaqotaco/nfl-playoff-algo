@@ -54,7 +54,8 @@ winners from lines better than Stern's 13.86.
 ## Daily job on the server
 
 `deploy/nfl-fairvalue.timer` runs `model.fairvalue` at 14:10 UTC with 20,000 simulations
-(about 6 seconds, 300 MB). It uses the 14:00 collector round and writes
+per setting (about 20 seconds, 300 MB). Each team gets a band: the lowest and highest fair
+value across uncertainty x1.75 and x2.5, widened by 2 simulation standard errors. It uses the 14:00 collector round and writes
 `/var/lib/nfl-collector/fairvalues/<T>-calibrated-hl2-k.csv`. It fails, and skips its
 healthcheck ping, if the snapshot is missing or nflverse lacks a result for a game played
 before T.
@@ -64,3 +65,6 @@ Backfill every day since a date (days without a 14:00 round are listed as skippe
 ```sh
 sudo -u collector COLLECTOR_DATA_DIR=/var/lib/nfl-collector python3 -m model.fairvalue --since 2026-11-02 --refresh --quiet
 ```
+
+`--moneylines` also turns next week's moneyline-only games (no spread strikes listed yet)
+into lines, using sigma times the inverse normal of P(home wins).
