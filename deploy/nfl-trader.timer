@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the trader daily, after the 14:10 UTC fair values
+
+[Timer]
+OnCalendar=*-*-* 14:20:00 UTC
+# No catch-up after downtime: a missed day simply means no orders that day.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

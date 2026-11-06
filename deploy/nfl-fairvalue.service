@@ -9,6 +9,8 @@ User=collector
 WorkingDirectory=/opt/nfl-playoff-algo
 EnvironmentFile=/etc/nfl-collector.env
 Environment=COLLECTOR_DATA_DIR=/var/lib/nfl-collector
+# Real fills from the trader are scored with the paper quotes.
+Environment=TRADER_DATA_DIR=/var/lib/nfl-trader
 # Uses the 14:00 collector round; --refresh downloads the latest nflverse results.
 ExecStart=/usr/bin/python3 -m model.fairvalue --refresh --sims 20000 --quiet
 # Rebuild paper quotes, fills and markouts from everything saved so far.

@@ -6,3 +6,7 @@ __pycache__/
 *.sqlite-*
 .env
 .DS_Store
+# API keys never belong in the repo
+*.pem
+*.key
+*kalshi*key*

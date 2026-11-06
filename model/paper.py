@@ -21,12 +21,16 @@ Rules agreed 2026-11-06 (see CLAUDE.md), applied to each daily fair-value file a
 - The report splits results by whether a trade agrees with the favorite-longshot bias:
   buying a favorite (price >= 0.50) or selling a longshot (price < 0.50).
 
+Real fills from the trader (TRADER_DATA_DIR/fills-production.csv), if any, are scored the
+same way as "real", so paper and real trading can be compared directly.
+
 Everything is recomputed from the fair-value CSVs, the collector's tidy.sqlite and the
 nflverse schedule, so the results can always be reproduced.
 """
 import argparse
 import csv
 import math
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -54,6 +58,10 @@ CREATE TABLE quotes (
 CREATE TABLE takers (
     id INTEGER PRIMARY KEY, t TEXT, team TEXT, ticker TEXT, side TEXT, entry_time TEXT,
     price REAL, fee REAL, fair REAL, band_low REAL, band_high REAL
+);
+CREATE TABLE reals (
+    id INTEGER PRIMARY KEY, fill_id TEXT, created_time TEXT, ticker TEXT, side TEXT,
+    price REAL, count REAL, fee REAL
 );
 CREATE TABLE markouts (
     kind TEXT, ref INTEGER, horizon TEXT, mark_time TEXT, mid REAL, exit REAL,
@@ -194,7 +202,7 @@ def build(base, out_path):
     fairvalues = load_fairvalues(base / "fairvalues")
 
     out = sqlite3.connect(out_path)
-    out.executescript("DROP TABLE IF EXISTS quotes; DROP TABLE IF EXISTS takers; "
+    out.executescript("DROP TABLE IF EXISTS quotes; DROP TABLE IF EXISTS takers; DROP TABLE IF EXISTS reals; "
                       "DROP TABLE IF EXISTS markouts;" + SCHEMA)
     next_t = {t: (fairvalues[i + 1][0] if i + 1 < len(fairvalues) else t + timedelta(days=1))
               for i, (t, _) in enumerate(fairvalues)}
@@ -242,6 +250,19 @@ def build(base, out_path):
                     "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (iso(t), team, ticker, side, iso(taker_snap.time), price, fee, fair, low, high))
                 add_markouts(out, market, "taker", cur.lastrowid, ticker, side, taker_snap.time, price, fee, kickoffs)
+
+    # Real fills: a bid fill means we bought YES, an ask fill that we sold it.
+    fills = Path(os.environ.get("TRADER_DATA_DIR", base / "trader")) / "fills-production.csv"
+    if fills.exists():
+        with open(fills, newline="") as f:
+            for fill in csv.DictReader(f):
+                count = float(fill["count_fp"])
+                price, fee = float(fill["yes_price_dollars"]), float(fill["fee_cost"] or 0) / count
+                entry = data.parse_time(fill["created_time"])
+                cur = out.execute("INSERT INTO reals (fill_id, created_time, ticker, side, price, count, fee) "
+                                  "VALUES (?,?,?,?,?,?,?)",
+                                  (fill["fill_id"], fill["created_time"], fill["ticker"], fill["book_side"], price, count, fee))
+                add_markouts(out, market, "real", cur.lastrowid, fill["ticker"], fill["book_side"], entry, price, fee, kickoffs)
     out.commit()
     return out
 
@@ -303,14 +324,14 @@ def report(out):
     print("Taker comparisons:", out.execute("SELECT COUNT(*) FROM takers").fetchone()[0])
     print("\nMarkouts per contract, after fees (mean +- SE by game day).")
     print("Mid = did the price move our way; exit = closing out by crossing the spread.")
-    for kind in ("quote", "taker"):
+    for kind in ("quote", "taker", "real"):
         for horizon in HORIZONS:
             rows = out.execute("SELECT pnl_mid, pnl_exit, game_day FROM markouts WHERE kind = ? AND horizon = ? "
                                "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
             print(f"  {kind:5s} {horizon:14s} mid {summary([(r[0], r[2]) for r in rows]):36s} "
                   f"exit {summary([(r[1], r[2]) for r in rows])}")
     print("\nBy favorite-longshot bias (mid markouts): agrees = buying a favorite or selling a longshot.")
-    for kind in ("quote", "taker"):
+    for kind in ("quote", "taker", "real"):
         for horizon in HORIZONS:
             rows = out.execute("SELECT pnl_mid, game_day, side, price FROM markouts WHERE kind = ? AND horizon = ? "
                                "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
