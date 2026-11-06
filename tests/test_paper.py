@@ -6,7 +6,7 @@ from pathlib import Path
 
 from collector import tidy
 from model import paper
-from model.paper import quote_price, taker_fee
+from model.paper import agrees_with_longshot_bias, clustered_se, quote_price, taker_fee
 
 GAMES_HEADER = ["game_id", "season", "game_type", "week", "gameday", "gametime", "away_team", "home_team",
                 "location", "spread_line", "result", "home_score", "away_score"]
@@ -37,6 +37,22 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(quote_price("ask", 0.30, 0.40, 0.55, 0.60), 0.59)
 
 
+class ReportTests(unittest.TestCase):
+    def test_clustered_errors_count_game_days_not_fills(self):
+        # Ten identical fills before one game day and ten before another: two pieces of
+        # evidence. The plain SE would claim far more certainty.
+        values = [0.05] * 10 + [-0.03] * 10
+        days = ["d1"] * 10 + ["d2"] * 10
+        self.assertAlmostEqual(clustered_se(values, days), 0.04, places=9)
+        self.assertIsNone(clustered_se(values, ["d1"] * 20))
+
+    def test_longshot_bias_direction(self):
+        self.assertTrue(agrees_with_longshot_bias("bid", 0.80))  # buy a favorite
+        self.assertTrue(agrees_with_longshot_bias("ask", 0.10))  # sell a longshot
+        self.assertFalse(agrees_with_longshot_bias("bid", 0.15))  # buy a longshot
+        self.assertFalse(agrees_with_longshot_bias("ask", 0.88))  # sell a favorite
+
+
 class BuildTests(unittest.TestCase):
     """A small world: BUF looks cheap and its bid fills; NYG looks rich, its ask fills
     later, and a taker sale is logged at the next snapshot."""
@@ -52,7 +68,9 @@ class BuildTests(unittest.TestCase):
             "2026-11-10T15:30:01Z": {"BUF": (0.96, 0.97), "NYG": (0.55, 0.57)},
             "2026-11-11T15:00:01Z": {"BUF": (0.95, 0.97), "NYG": (0.50, 0.52)},
             "2026-11-12T14:00:01Z": {"BUF": (0.97, 0.98), "NYG": (0.45, 0.47)},
+            "2026-11-13T14:00:01Z": {"BUF": (None, None), "NYG": (0.44, 0.46)},
         }
+        results = {"2026-11-13T14:00:01Z": {"BUF": "yes"}}  # BUF clinches and settles
         for k, (started, by_team) in enumerate(books.items()):
             rid = f"R{k}"
             db.execute("INSERT INTO rounds VALUES (?,?,?,?,?,?,?,?)",
@@ -61,8 +79,9 @@ class BuildTests(unittest.TestCase):
                 ticker = f"KXNFLPLAYOFF-27-{team}"
                 db.execute("INSERT INTO books VALUES (?,?,?,?,?,?,?,?,?,?)",
                            (rid, ticker, started, "ok", 1, 1, bid, 10, ask, 10))
+                result = results.get(started, {}).get(team, "")
                 db.execute("INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?)",
-                           (rid, ticker, "KXNFLPLAYOFF-27", team, "active", "", "", 0, 0))
+                           (rid, ticker, "KXNFLPLAYOFF-27", team, "finalized" if result else "active", result, "", 0, 0))
         trades = [
             ("t1", "BUF", "2026-11-10T14:05:00.000000Z", 0.90),  # before the quote starts
             ("t2", "BUF", "2026-11-10T14:20:00.000000Z", 0.94),  # through our 0.95 bid
@@ -122,6 +141,22 @@ class BuildTests(unittest.TestCase):
                                    "AND horizon = '1h'").fetchone()[0]
         # Sold at 0.58 (fee 2c), bought back at the 15:30 ask 0.57 (fee 2c).
         self.assertEqual(exit_1h, round(0.58 - 0.57 - 0.02 - 0.02, 4))
+
+
+    def test_settled_market_marked_at_payout(self):
+        marks = dict(self.out.execute(
+            "SELECT horizon, round(pnl_mid, 4) FROM markouts m JOIN quotes q ON m.ref = q.id "
+            "WHERE kind = 'quote' AND q.team = 'BUF'").fetchall())
+        self.assertEqual(marks["latest"], round(1.0 - 0.95, 4))
+        self.assertEqual(marks["settlement"], round(1.0 - 0.95, 4))
+        nyg = [h for (h,) in self.out.execute(
+            "SELECT horizon FROM markouts m JOIN quotes q ON m.ref = q.id WHERE kind = 'quote' AND q.team = 'NYG'")]
+        self.assertIn("latest", nyg)
+        self.assertNotIn("settlement", nyg)
+
+    def test_markouts_carry_their_game_day(self):
+        days = {d for (d,) in self.out.execute("SELECT DISTINCT game_day FROM markouts")}
+        self.assertEqual(days, {"2026-11-11"})
 
 
 if __name__ == "__main__":

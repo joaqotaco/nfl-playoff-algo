@@ -85,9 +85,13 @@ Rebuilt from scratch after each daily fair-value run, into `paper.sqlite`:
 - **Fills:** only when a non-block trade goes through the price. A window still running is `open`.
 - **Taker comparison:** cross the spread at the 14:30 snapshot if the band still beats the price
   after the taker fee.
-- **Markouts:** per contract after fees, at the first snapshot 1h and 24h after entry and at
-  14:00 UTC the day after the next game day. "mid" measures information; "exit" is what
-  closing out by crossing the spread would have made.
+- **Markouts:** per contract after fees, at the first snapshot 1h and 24h after entry, at
+  14:00 UTC the day after the next game day, at the latest snapshot, and at settlement.
+  "mid" measures information; "exit" is what closing out by crossing the spread would
+  have made.
+- **Error bars** treat each game day as one unit, since fills before the same games share
+  one outcome. The report also splits results by whether a trade agrees with the
+  favorite-longshot bias (buying a favorite or selling a longshot).
 
 ```sh
 python3 -m model.paper    # rebuild and print the report
