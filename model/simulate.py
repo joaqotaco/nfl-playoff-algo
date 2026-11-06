@@ -34,9 +34,13 @@ class Uncertainty:
     lasting_sd: float = 1.78  # same for all the team's remaining games
     drift_sd: float = 1.00  # added per week ahead, as a random walk
     one_off_sd: float = 1.45  # per team, per game
+    # Later lines move this many points per point a team beat (or missed) its earlier lines
+    # since T. 0.061 measured on 2015-2025; 0 turns it off.
+    feedback: float = 0.0
 
     def scaled(self, factor):
-        return Uncertainty(self.lasting_sd * factor, self.drift_sd * factor, self.one_off_sd * factor)
+        return Uncertainty(self.lasting_sd * factor, self.drift_sd * factor, self.one_off_sd * factor,
+                           self.feedback)
 
     @classmethod
     def fixed(cls, sd):
@@ -64,6 +68,10 @@ class Result:
     playoffs: np.ndarray  # per team, count of seasons making the playoffs
     division: np.ndarray  # count of division titles
     seeds: np.ndarray  # 32 x 7 counts of each seed
+    wins_mean: np.ndarray = None  # per team, mean remaining wins (ties count half)
+    wins_var: np.ndarray = None  # per team, variance of remaining wins
+    home_win: np.ndarray = None  # per remaining game, P(home wins), ties counting half
+    wins: np.ndarray = None  # sims x 32 remaining wins, for joint (between-team) checks
 
     def probability(self, counts):
         return counts / self.sims
@@ -113,8 +121,29 @@ def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards
         schedule.market_line,
         schedule.rating_line + error[:, steps, schedule.home] - error[:, steps, schedule.away] + noise,
     )
-    margins = rng.normal(lines, sigma)
-    margins[rng.random((sims, n)) < p_tie] = 0.0
+    tie = rng.random((sims, n)) < p_tie
+    if uncertainty.feedback == 0:
+        margins = rng.normal(lines, sigma)
+        margins[tie] = 0.0
+    else:
+        # Play week by week: each result moves both teams' later lines by feedback x surprise.
+        margins = np.empty((sims, n))
+        surprise = np.zeros((sims, 32))
+        for week in np.unique(schedule.weeks_ahead):
+            idx = np.flatnonzero(schedule.weeks_ahead == week)
+            h, a = schedule.home[idx], schedule.away[idx]
+            line = lines[:, idx] + uncertainty.feedback * (surprise[:, h] - surprise[:, a])
+            m = rng.normal(line, sigma)
+            m[tie[:, idx]] = 0.0
+            margins[:, idx] = m
+            np.add.at(surprise.T, h, (m - line).T)
+            np.add.at(surprise.T, a, -(m - line).T)
+
+    # Remaining wins per team in each simulated season (a tie is half a win).
+    home_share = np.where(margins > 0, 1.0, np.where(margins < 0, 0.0, 0.5))
+    wins = np.zeros((sims, 32))
+    np.add.at(wins.T, schedule.home, home_share.T)
+    np.add.at(wins.T, schedule.away, (1 - home_share).T)
 
     home = np.concatenate([schedule.played_home, schedule.home])
     away = np.concatenate([schedule.played_away, schedule.away])
@@ -130,5 +159,6 @@ def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards
             playoffs[seeded] += 1
             division[winners] += 1
             seeds[seeded, np.arange(len(seeded))] += 1
-    return Result(sims, playoffs, division, seeds)
+    return Result(sims, playoffs, division, seeds, wins.mean(axis=0), wins.var(axis=0),
+                  home_share.mean(axis=0), wins)
 
