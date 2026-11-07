@@ -1,0 +1,16 @@
+[Unit]
+Description=Place the day's Kalshi orders (dry run unless TRADER_FLAGS=--live)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=trader
+Group=trader
+SupplementaryGroups=collector
+WorkingDirectory=/opt/nfl-playoff-algo
+EnvironmentFile=/etc/nfl-trader.env
+Environment=COLLECTOR_DATA_DIR=/var/lib/nfl-collector
+Environment=TRADER_DATA_DIR=/var/lib/nfl-trader
+ExecStart=/usr/bin/python3 -m trader.run $TRADER_FLAGS
+TimeoutStartSec=10min
