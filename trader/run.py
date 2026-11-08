@@ -261,6 +261,11 @@ def run(args, log, tdir, now):
 
     games = data.load_games(data.latest_nflverse(base))
     expires = expiry(at, sorted(g.kickoff for g in games), now)
+    log.write({"kind": "plan", "fair_values": path.name, "balance": balance, "committed": committed,
+               "already_placed": len(existing), "expires": expires.isoformat(),
+               "candidates": [vars(o) for o in candidates], "chosen": [o.client_order_id for o in chosen]})
+    if balance <= 0:
+        print("account balance is $0: nothing can be placed (add funds; on demo, mock funds)")
     print(f"balance ${balance:.2f}, committed ${committed:.2f}, already placed today {len(existing)}; "
           f"{len(candidates)} candidates, placing {len(chosen)}; orders expire {expires:%Y-%m-%d %H:%M} UTC")
     results = []
@@ -271,7 +276,9 @@ def run(args, log, tdir, now):
               f"ties up ${order.cost:.2f}): {outcome}")
     fills = save_fills(client, tdir / f"fills-{env}.csv") if client else 0
     failed = any(outcome == "failed" for _, outcome in results)
-    return {"outcome": "ok" if not failed else "degraded", "failed": failed, "placed": sum(o == "placed" for _, o in results),
+    return {"outcome": "ok" if not failed else "degraded", "failed": failed, "balance": balance,
+            "committed": round(committed, 4), "candidates": len(candidates), "chosen": len(chosen),
+            "placed": sum(o == "placed" for _, o in results),
             "rejected": sum(o == "rejected" for _, o in results), "fills_saved": fills}
 
 
