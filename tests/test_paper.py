@@ -112,6 +112,10 @@ class BuildTests(unittest.TestCase):
                             playoff_bid=0.58, playoff_ask=0.59))
             w.writerow(dict(team="DAL", p_playoffs=0.30, p_playoffs_low=0.27, p_playoffs_high=0.33,
                             playoff_bid=0.28, playoff_ask=0.30))
+        # A one-off test file at another time must not become a paper-trading day.
+        with open(self.base / "fairvalues" / "20261110T0330Z-calibrated-hl2-k.csv", "w") as f:
+            f.write("team,p_playoffs,p_playoffs_low,p_playoffs_high,playoff_bid,playoff_ask\n"
+                    "DAL,0.9,0.89,0.91,0.28,0.30\n")
         self.out = paper.build(self.base, self.base / "paper.sqlite")
 
     def tearDown(self):

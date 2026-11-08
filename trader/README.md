@@ -36,3 +36,14 @@ An order request that fails in transit is looked up on the exchange, never resen
 - **Cancel everything now:** `sudo -u trader ... python3 -m trader.run --cancel-all`
   (see the deploy steps for the full command).
 - **Stop the schedule:** `systemctl disable --now nfl-trader.timer`.
+
+## Testing on demo right now
+`deploy/demo-now.sh` computes fair values from the latest 30-minute snapshot and runs the
+trader on them, instead of waiting for 14:00 UTC. It refuses to run unless `KALSHI_ENV=demo`.
+Those one-off fair values don't count as paper-trading days. Don't run it while games are in
+progress: the fair values need final results for every game that has kicked off.
+
+```sh
+ssh $SERVER 'bash /opt/nfl-playoff-algo/deploy/demo-now.sh'        # dry run
+ssh $SERVER 'bash /opt/nfl-playoff-algo/deploy/demo-now.sh live'   # place orders on demo
+```

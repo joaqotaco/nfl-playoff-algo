@@ -159,8 +159,8 @@ class RunTests(unittest.TestCase):
         self.env.stop()
         self.dir.cleanup()
 
-    def go(self, live=False, cancel_all=False):
-        args = mock.Mock(live=live, cancel_all=cancel_all)
+    def go(self, live=False, cancel_all=False, at=None):
+        args = mock.Mock(live=live, cancel_all=cancel_all, at=at)
         log = mock.Mock()
         out = io.StringIO()
         with redirect_stdout(out):
@@ -194,8 +194,16 @@ class RunTests(unittest.TestCase):
     def test_stale_fair_values_stop_trading(self):
         self.now += timedelta(hours=4)
         summary, text = self.go()
-        self.assertIn("not trading", text)
+        self.assertIn("hours old", text)
         self.assertTrue(summary["failed"])
+
+    def test_one_off_fair_values_get_their_own_order_ids(self):
+        os.rename(self.collector / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv",
+                  self.collector / "fairvalues" / "20261110T1300Z-calibrated-hl2-k.csv")
+        with mock.patch.object(trader, "plan", wraps=trader.plan) as planned:
+            summary, text = self.go(at=datetime(2026, 11, 10, 13, tzinfo=UTC))
+        self.assertEqual(planned.call_args.args[2], "20261110T1300")
+        self.assertEqual(summary["outcome"], "ok")
 
 
 @unittest.skipUnless(HAVE_CRYPTO, "needs the cryptography package")

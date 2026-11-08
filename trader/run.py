@@ -3,6 +3,7 @@
     python3 -m trader.run                 dry run: print the plan, send nothing
     python3 -m trader.run --live          send the orders to KALSHI_ENV (demo unless set)
     python3 -m trader.run --cancel-all    cancel this bot's resting orders
+    python3 -m trader.run --at 2026-11-08T03:30:00Z   use fair values from another time (tests)
 
 Settings come from the environment (see deploy/trader.env.example):
     KALSHI_ENV          demo or production
@@ -227,16 +228,22 @@ def run(args, log, tdir, now):
         return {"outcome": "stopped", "cancelled": cancelled}
 
     base = data_dir()
-    at = data.default_at(now)
+    at = args.at or data.default_at(now)
     path = base / "fairvalues" / f"{at:%Y%m%dT%H%MZ}{FAIRVALUE_SUFFIX}"
-    if not path.exists() or now - at > MAX_FAIRVALUE_AGE:
-        print(f"no fresh fair values ({path.name}); not trading")
+    if not path.exists():
+        print(f"no fair values for {at:%Y-%m-%d %H:%M} UTC ({path.name} missing); not trading")
         return {"outcome": "no fair values", "failed": True}
+    if now - at > MAX_FAIRVALUE_AGE:
+        print(f"fair values from {at:%Y-%m-%d %H:%M} UTC are {(now - at) / timedelta(hours=1):.1f} hours old "
+              f"(limit {MAX_FAIRVALUE_AGE / timedelta(hours=1):g}); not trading")
+        return {"outcome": "stale fair values", "failed": True}
     with open(path, newline="") as f:
         rows = list(csv.DictReader(f))
     books = live_books(Fetcher())
 
-    day = f"{at:%Y%m%d}"
+    # The daily 14:00 run is keyed by date; one-off runs by date and time, so they don't
+    # use up that day's orders.
+    day = f"{at:%Y%m%d}" if (at.hour, at.minute) == (14, 0) else f"{at:%Y%m%dT%H%M}"
     since = at.replace(hour=0, minute=0)
     if client:
         status, bal = client.get("/portfolio/balance")
@@ -272,6 +279,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="actually send orders")
     parser.add_argument("--cancel-all", action="store_true")
+    parser.add_argument("--at", type=data.parse_time, help="fair-value time, if not today's 14:00 UTC")
     args = parser.parse_args()
     tdir = trader_dir()
     now = datetime.now(UTC)
