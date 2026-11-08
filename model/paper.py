@@ -183,6 +183,8 @@ def load_fairvalues(folder):
     out = []
     for path in files:
         t = datetime.strptime(path.name[:14], "%Y%m%dT%H%MZ").replace(tzinfo=data.UTC)
+        if (t.hour, t.minute) != (14, 0):
+            continue  # the daily rule uses 14:00 UTC; other times are one-off tests
         with open(path, newline="") as f:
             rows = list(csv.DictReader(f))
         if rows and "p_playoffs_low" in rows[0]:
