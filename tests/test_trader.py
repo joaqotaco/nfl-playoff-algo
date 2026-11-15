@@ -197,6 +197,22 @@ class RunTests(unittest.TestCase):
         self.assertIn("hours old", text)
         self.assertTrue(summary["failed"])
 
+    def test_one_off_orders_do_not_count_against_the_daily_run(self):
+        class Account:
+            def get(self, path, params=None):
+                return 200, {"balance": 2000}
+
+            def get_all(self, path, params, key):
+                if path == "/portfolio/orders" and "min_ts" in params:
+                    return [{"client_order_id": "nflpo-20261110T0430-NYG-ask"}]
+                return []
+
+        with mock.patch.object(trader, "make_client", return_value=Account()), \
+                mock.patch.object(trader, "save_fills", return_value=0), \
+                mock.patch.object(trader, "plan", wraps=trader.plan) as planned:
+            self.go()
+        self.assertEqual(planned.call_args.args[3], set())  # nothing already placed for the 14:00 run
+
     def test_one_off_fair_values_get_their_own_order_ids(self):
         os.rename(self.collector / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv",
                   self.collector / "fairvalues" / "20261110T1300Z-calibrated-hl2-k.csv")

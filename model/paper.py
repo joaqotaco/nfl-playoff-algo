@@ -67,7 +67,8 @@ CREATE TABLE markouts (
     kind TEXT, ref INTEGER, horizon TEXT, mark_time TEXT, mid REAL, exit REAL,
     pnl_mid REAL, pnl_exit REAL,
     side TEXT, price REAL,
-    game_day TEXT  -- ET date of the first game after entry: the unit for error bars
+    game_day TEXT,  -- ET date of the first game after entry: the unit for error bars
+    ticker TEXT
 );
 """
 
@@ -282,8 +283,9 @@ def add_markouts(out, market, kind, ref, ticker, side, entry, price, fee, kickof
         mark_time, mid, exit_price, pnl_mid, pnl_exit, settled = result
         rows = [horizon] + (["settlement"] if horizon == "latest" and settled else [])
         for name in rows:
-            out.execute("INSERT INTO markouts VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (kind, ref, name, iso(mark_time), mid, exit_price, pnl_mid, pnl_exit, side, price, game_day))
+            out.execute("INSERT INTO markouts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (kind, ref, name, iso(mark_time), mid, exit_price, pnl_mid, pnl_exit, side, price, game_day,
+                         ticker))
 
 
 def clustered_se(values, clusters):
@@ -303,8 +305,8 @@ def clustered_se(values, clusters):
     return math.sqrt(g / (g - 1) * sum(x * x for x in sums.values())) / len(values)
 
 
-def summary(rows):
-    """rows: (value, cluster). Mean in cents with game-day error bars."""
+def summary(rows, unit="game days"):
+    """rows: (value, cluster). Mean in cents with error bars treating each cluster as one unit."""
     if not rows:
         return "-"
     values = [v for v, _ in rows]
@@ -312,7 +314,7 @@ def summary(rows):
     mean = sum(values) / len(values) * 100
     se = clustered_se(values, clusters)
     error = f"+-{se * 100:.1f}" if se is not None else "+-?"
-    return f"{mean:+5.1f}c {error} (n={len(values)}, {len(set(clusters))} game days)"
+    return f"{mean:+5.1f}c {error} (n={len(values)}, {len(set(clusters))} {unit})"
 
 
 def agrees_with_longshot_bias(side, price):
@@ -340,6 +342,20 @@ def report(out):
             agree = [(r[0], r[1]) for r in rows if agrees_with_longshot_bias(r[2], r[3])]
             against = [(r[0], r[1]) for r in rows if not agrees_with_longshot_bias(r[2], r[3])]
             print(f"  {kind:5s} {horizon:14s} agrees {summary(agree):36s} against {summary(against)}")
+    print("\nLatest markouts (mid) with each TEAM as one unit: the model quotes the same teams day")
+    print("after day, and every fill is marked against the same latest price, so teams, not fills,")
+    print("are the independent pieces of evidence.")
+    for kind in ("quote", "taker", "real"):
+        rows = out.execute("SELECT pnl_mid, ticker FROM markouts WHERE kind = ? AND horizon = 'latest' "
+                           "AND pnl_mid IS NOT NULL", (kind,)).fetchall()
+        print(f"  {kind:5s} latest  {summary(rows, 'teams')}")
+    print("\nQuote fills by team (latest mid markout, cents):")
+    for team, side, n, mean in out.execute(
+            "SELECT substr(ticker, 17), group_concat(DISTINCT side), COUNT(*), AVG(pnl_mid) * 100 FROM markouts "
+            "WHERE kind = 'quote' AND horizon = 'latest' AND pnl_mid IS NOT NULL "
+            "GROUP BY ticker ORDER BY COUNT(*) DESC"):
+        print(f"  {team:4s} {side:7s} {n:3d} fills  {mean:+6.1f}c")
+
     print("\nLatest quotes:")
     for row in out.execute("SELECT t, team, side, price, round(fair, 3), round(band_low, 2), round(band_high, 2), "
                            "book_bid, book_ask, status FROM quotes ORDER BY t DESC, team LIMIT 15"):

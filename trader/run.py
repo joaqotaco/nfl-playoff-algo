@@ -255,7 +255,9 @@ def run(args, log, tdir, now):
         today = client.get_all("/portfolio/orders", {"min_ts": int(since.timestamp()), "limit": 1000}, "orders")
     else:
         balance, positions, resting, today = MAX_COMMITTED_DOLLARS, [], [], []
-    existing = {o.get("client_order_id") for o in today if (o.get("client_order_id") or "").startswith(f"{CLIENT_PREFIX}-{day}")}
+    # The trailing dash matters: "nflpo-20261108-" must not match one-off "nflpo-20261108T0430-" orders.
+    existing = {o.get("client_order_id") for o in today
+                if (o.get("client_order_id") or "").startswith(f"{CLIENT_PREFIX}-{day}-")}
     committed = committed_dollars(positions, resting)
     chosen, candidates = plan(rows, books, day, existing, committed, len(existing), balance)
 
