@@ -47,6 +47,9 @@ from trader.kalshi import BASE_URLS, Client, Signer
 CONTRACTS = 1
 MAX_COMMITTED_DOLLARS = 20.0
 MAX_NEW_ORDERS_PER_DAY = 10
+# Contracts per team, held plus resting, in either direction (decided 2026-11-15), so the
+# $20 tests the model across teams instead of becoming one repeated bet.
+MAX_CONTRACTS_PER_TEAM = 3
 MAX_FAIRVALUE_AGE = timedelta(hours=3)
 CLIENT_PREFIX = "nflpo"
 ORDERS_PATH = "/portfolio/events/orders"
@@ -89,8 +92,12 @@ def live_books(fetcher):
     return books
 
 
-def plan(rows, books, day, existing_ids, committed, orders_today, balance):
-    """The orders to place now, biggest edge first, within every limit."""
+def plan(rows, books, day, existing_ids, committed, orders_today, balance, per_team=None):
+    """The orders to place now, biggest edge first, within every limit.
+
+    per_team: {ticker: contracts already held or resting}.
+    """
+    per_team = dict(per_team or {})
     candidates = []
     for row in rows:
         team = row["team"]
@@ -112,10 +119,23 @@ def plan(rows, books, day, existing_ids, committed, orders_today, balance):
     for order in candidates:
         if len(chosen) >= slots:
             break
+        if per_team.get(order.ticker, 0) + CONTRACTS > MAX_CONTRACTS_PER_TEAM:
+            continue
         if order.cost <= budget:
             chosen.append(order)
             budget -= order.cost
+            per_team[order.ticker] = per_team.get(order.ticker, 0) + CONTRACTS
     return chosen, candidates
+
+
+def contracts_per_team(positions, resting):
+    """Contracts held plus resting per ticker, whichever side."""
+    counts = {}
+    for p in positions:
+        counts[p["ticker"]] = counts.get(p["ticker"], 0) + abs(float(p.get("position_fp") or 0))
+    for o in resting:
+        counts[o["ticker"]] = counts.get(o["ticker"], 0) + float(o.get("remaining_count_fp") or 0)
+    return counts
 
 
 def committed_dollars(positions, resting):
@@ -259,7 +279,8 @@ def run(args, log, tdir, now):
     existing = {o.get("client_order_id") for o in today
                 if (o.get("client_order_id") or "").startswith(f"{CLIENT_PREFIX}-{day}-")}
     committed = committed_dollars(positions, resting)
-    chosen, candidates = plan(rows, books, day, existing, committed, len(existing), balance)
+    chosen, candidates = plan(rows, books, day, existing, committed, len(existing), balance,
+                              contracts_per_team(positions, resting))
 
     games = data.load_games(data.latest_nflverse(base))
     expires = expiry(at, sorted(g.kickoff for g in games), now)
