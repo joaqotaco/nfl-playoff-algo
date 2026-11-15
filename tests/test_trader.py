@@ -60,6 +60,17 @@ class PlanTests(unittest.TestCase):
         chosen, _ = plan(ROWS, BOOKS, "d", {"nflpo-d-NYG-ask"}, 0.0, 1, 20.0)
         self.assertNotIn("NYG", [o.team for o in chosen])
 
+    def test_per_team_limit_counts_held_and_resting_contracts(self):
+        held = {"KXNFLPLAYOFF-27-NYG": 3, "KXNFLPLAYOFF-27-NO": 2}
+        chosen, _ = plan(ROWS, BOOKS, "d", set(), 0.0, 0, 20.0, held)
+        # NYG is full; NO has room for one more; BUF is untouched.
+        self.assertEqual([o.team for o in chosen], ["NO", "BUF"])
+
+    def test_contracts_per_team_adds_positions_and_resting_either_side(self):
+        positions = [{"ticker": "A", "position_fp": "-2.00"}]
+        resting = [{"ticker": "A", "remaining_count_fp": "1.00"}, {"ticker": "B", "remaining_count_fp": "1.00"}]
+        self.assertEqual(trader.contracts_per_team(positions, resting), {"A": 3.0, "B": 1.0})
+
     def test_committed_counts_positions_and_resting_collateral(self):
         positions = [{"market_exposure_dollars": "0.7200"}, {"market_exposure_dollars": "-0.3000"}]
         resting = [{"book_side": "bid", "remaining_count_fp": "1.00", "yes_price_dollars": "0.2500"},

@@ -23,6 +23,7 @@ with about $20.
 | Total committed (positions + resting orders) | $20, and never more than the balance |
 | New orders per day | 10, biggest edge first |
 | Orders per team and side per day | 1 |
+| Contracts per team (held + resting, either side) | 3 |
 | Fair values older than | 3 hours: no trading |
 
 An order request that fails in transit is looked up on the exchange, never resent.

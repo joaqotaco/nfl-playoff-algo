@@ -95,7 +95,8 @@ Agreed (2026-11-04/05):
 - Real money (decided 2026-11-06): about $20, automated through the Kalshi API (trader/).
   Same one-sided rule as paper quotes (not two-sided market making). Demo first; production
   only after reviewing ~2 more game days of paper markouts. Limits: 1 contract per order,
-  $20 committed, 10 new orders a day, hold to settlement, deposit only $20. Post-only orders
+  $20 committed, 10 new orders a day, 3 contracts per team (2026-11-15), hold to settlement,
+  deposit only $20. Production approved 2026-11-15 pending the demo-rejection and by-team checks. Post-only orders
   that expire at the next kickoff. Dry run by default; production needs two settings.
 
 Open decisions:
