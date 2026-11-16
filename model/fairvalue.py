@@ -35,7 +35,8 @@ BAND_SE = 2
 
 UNCERTAINTY = {
     "measured": Uncertainty(),  # lasting + drift + one-off, from model/calibrate.py
-    # Measured x2: the factor that makes 2015-2025 playoff predictions calibrated (model/backtest.py).
+    # Measured x1.5 with result feedback: calibrates 2015-2025 win totals and win differences
+    # (model/backtest.py --win-totals). The previous central setting is x2-no-feedback below.
     "calibrated": CENTRAL,
     "x2-no-feedback": Uncertainty().scaled(2.0),  # the previous central setting
     "fixed": Uncertainty.fixed(2.7),  # strength fixed after T, one draw per season
