@@ -39,6 +39,7 @@ line.
 | `fairvalue.py` | P(playoffs) and P(division) per team at T, next to Kalshi's bid/ask from the same collector round. Saves a CSV in `data/fairvalues/`. |
 | `calibrate.py` | Pooled half-life test and the strength-uncertainty estimates, from 2015-2025 lines. |
 | `backtest.py` | Runs the whole model from weeks 6, 9, 12, 15 of 2015-2025 and scores it against who made the playoffs. |
+| `export_joint.py` | Every simulated season's seeds at T (x1, x1.5, x2) as `.npz`, for research across contracts. Read-only on the data; never writes under `fairvalues/`. |
 
 ```sh
 python3 -m model.validate
@@ -96,3 +97,26 @@ Rebuilt from scratch after each daily fair-value run, into `paper.sqlite`:
 ```sh
 python3 -m model.paper    # rebuild and print the report
 ```
+
+## Joint outcomes for research (`model/export_joint.py`)
+
+`fairvalue.py` keeps only each team's counts. For questions across contracts (sizing a
+portfolio of playoff contracts), `export_joint.py` keeps every simulated season: an int8
+`seed` matrix, sims x 32, where 0 means missed the playoffs and 1-4 are division winners.
+It uses the same setup as `fairvalue.run()` (`fairvalue.setup()`), and keeping the outcomes
+draws no extra random numbers, so the counts are identical (pinned in `tests/test_simulate.py`).
+
+```sh
+sqlite3 /var/lib/nfl-collector/tidy.sqlite ".backup copy/tidy.sqlite"   # as collector, at :15 or :45
+python3 -m model.export_joint --at 2026-11-08T14:00Z --data-dir copy --nflverse auto --out joint/
+```
+
+- `--nflverse` is required: a path, or `auto` for the first file downloaded at or after T + 10
+  minutes (what the 14:10 job used). It prints the file it chose.
+- The x1.5 run is checked against that day's fair-value CSV when it is in `--data-dir`: every
+  team within 3 standard errors, and whether the counts match exactly. With the same sims,
+  seed, inputs and code, they match exactly (numpy 1.26 and 2.4 give the same draws).
+- The three scales use the same seed, so they share random numbers: compare them, don't pool them.
+- Fair values before 2026-11-06 14:00 UTC were backfilled with later code and a later nflverse
+  file, so they are not point-in-time.
+

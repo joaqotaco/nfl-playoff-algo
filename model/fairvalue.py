@@ -16,26 +16,33 @@ import sys
 from datetime import timedelta
 import sqlite3
 import statistics
+from dataclasses import dataclass
 
 import numpy as np
 
 from collector.round import data_dir
 from model import data
 from model.league import CONFERENCE_OF, TEAMS, division_ticker, playoff_ticker
-from model.ratings import DEFAULT_HALF_LIFE, fit, lines_at, past_lines
-from model.simulate import FEEDBACK, Uncertainty, build_schedule, simulate
+from model.ratings import DEFAULT_HALF_LIFE, Fit, fit, lines_at, past_lines
+from model.simulate import FEEDBACK, Schedule, Uncertainty, build_schedule, simulate
 
 # Central setting and band (decided 2026-11-06): later lines react to simulated results
 # (FEEDBACK), and the measured uncertainty is scaled x1.5, which calibrates 2015-2025 win
 # totals and win differences. The band spans x1 to x2 (just either side of calibrated),
 # widened by BAND_SE simulation standard errors.
-CENTRAL = Uncertainty(feedback=FEEDBACK).scaled(1.5)
+def scaled_uncertainty(factor):
+    """Measured strength uncertainty with result feedback, scaled (x1.5 central, x1 and x2 band)."""
+    return Uncertainty(feedback=FEEDBACK).scaled(factor)
+
+
+CENTRAL = scaled_uncertainty(1.5)
 BAND_FACTORS = (1.0, 2.0)
 BAND_SE = 2
 
 UNCERTAINTY = {
     "measured": Uncertainty(),  # lasting + drift + one-off, from model/calibrate.py
-    # Measured x2: the factor that makes 2015-2025 playoff predictions calibrated (model/backtest.py).
+    # Measured x1.5 with result feedback: calibrates 2015-2025 win totals and win differences
+    # (model/backtest.py --win-totals). The previous central setting is x2-no-feedback below.
     "calibrated": CENTRAL,
     "x2-no-feedback": Uncertainty().scaled(2.0),  # the previous central setting
     "fixed": Uncertainty.fixed(2.7),  # strength fixed after T, one draw per season
@@ -75,16 +82,33 @@ def cents(x):
     return "  -" if x is None else f"{x * 100:3.0f}"
 
 
-def run(at, args, base, path, games, out=print):
-    slot, kalshi = data.kalshi_lines(base / "tidy.sqlite", at, games, use_moneylines=args.moneylines)
+@dataclass
+class Setup:
+    """Everything the simulation needs at T, apart from the uncertainty setting."""
+    slot: str  # the Kalshi collector round used
+    kalshi: list  # model.data.KalshiLine for games after T
+    sigma: float
+    ratings: Fit
+    schedule: Schedule
+
+
+def setup(at, base, games, half_life, ratings_use_kalshi, moneylines):
+    """Shared by run() and model/export_joint.py, so both simulate exactly the same season."""
+    slot, kalshi = data.kalshi_lines(base / "tidy.sqlite", at, games, use_moneylines=moneylines)
     sigma = market_sigma(kalshi)
-    rating_lines = lines_at(games, at, kalshi) if args.ratings_use_kalshi else past_lines(games, at)
-    ratings = fit(rating_lines, at, args.half_life)
+    rating_lines = lines_at(games, at, kalshi) if ratings_use_kalshi else past_lines(games, at)
+    ratings = fit(rating_lines, at, half_life)
     schedule = build_schedule(games, at, ratings, {(k.home, k.away, k.gameday): k.line for k in kalshi})
+    return Setup(slot, kalshi, sigma, ratings, schedule)
+
+
+def run(at, args, base, path, games, out=print):
+    s = setup(at, base, games, args.half_life, args.ratings_use_kalshi, args.moneylines)
+    slot, kalshi, sigma, ratings, schedule = s.slot, s.kalshi, s.sigma, s.ratings, s.schedule
     taus = args.uncertainty or ["calibrated"]
     results = {tau: simulate(schedule, sigma, UNCERTAINTY[tau], args.sims, args.seed) for tau in taus}
-    band_runs = [results[taus[0]]] + [simulate(schedule, sigma, Uncertainty(feedback=FEEDBACK).scaled(f),
-                                               args.sims, args.seed) for f in BAND_FACTORS]
+    band_runs = [results[taus[0]]] + [simulate(schedule, sigma, scaled_uncertainty(f), args.sims, args.seed)
+                                      for f in BAND_FACTORS]
 
     out(f"T = {at:%Y-%m-%d %H:%M} UTC   Kalshi snapshot {slot}   nflverse {path.name}")
     out(f"games left {len(schedule.home)} ({int((~np.isnan(schedule.market_line)).sum())} on Kalshi lines, "

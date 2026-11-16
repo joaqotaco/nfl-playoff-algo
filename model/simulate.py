@@ -16,7 +16,7 @@ import numpy as np
 
 from model.data import EASTERN
 from model.league import CONFERENCES, INDEX
-from model.standings import Season, seed_conference
+from model.standings import CONFERENCE_MASK, Season, seed_conference
 
 # 8 ties in 2,383 regular-season games, 2017-2025 (overtime shortened to 10 minutes in 2017).
 P_TIE = 8 / 2383
@@ -76,6 +76,9 @@ class Result:
     wins_var: np.ndarray = None  # per team, variance of remaining wins
     home_win: np.ndarray = None  # per remaining game, P(home wins), ties counting half
     wins: np.ndarray = None  # sims x 32 remaining wins, for joint (between-team) checks
+    # sims x 32 int8, only with keep_outcomes: each team's seed in each simulated season,
+    # 0 = missed the playoffs. Seeds 1-4 are the division winners.
+    seed_matrix: np.ndarray = None
 
     def probability(self, counts):
         return counts / self.sims
@@ -108,7 +111,21 @@ def build_schedule(games, at, fit, market_lines):
     )
 
 
-def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards=3):
+def check_seed_matrix(seed_matrix, wild_cards=3):
+    """Raise ValueError unless every simulated season seeds each conference exactly once per
+    seed 1..4+wild_cards (so 4 + wild_cards nonzero per conference)."""
+    for conference in CONFERENCES:
+        block = seed_matrix[:, CONFERENCE_MASK[conference]]
+        if not np.all((block > 0).sum(axis=1) == 4 + wild_cards):
+            raise ValueError(f"{conference}: a simulated season without exactly {4 + wild_cards} playoff teams")
+        for value in range(1, 5 + wild_cards):
+            if not np.all((block == value).sum(axis=1) == 1):
+                raise ValueError(f"{conference}: seed {value} not used exactly once in some simulated season")
+
+
+def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards=3, keep_outcomes=False):
+    """keep_outcomes also returns each simulated season's seeds (Result.seed_matrix). It draws
+    no extra random numbers, so every count is identical with it on or off."""
     rng = np.random.default_rng(seed)
     n = len(schedule.home)
     # Ratings include this week's lines, so drift starts the week after.
@@ -154,6 +171,7 @@ def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards
     playoffs = np.zeros(32)
     division = np.zeros(32)
     seeds = np.zeros((32, 4 + wild_cards))
+    seed_matrix = np.zeros((sims, 32), np.int8) if keep_outcomes else None
     for s in range(sims):
         home_points = np.concatenate([schedule.played_home_points, (MEAN_TOTAL + margins[s]) / 2])
         away_points = np.concatenate([schedule.played_away_points, (MEAN_TOTAL - margins[s]) / 2])
@@ -163,6 +181,10 @@ def simulate(schedule, sigma, uncertainty, sims, seed=0, p_tie=P_TIE, wild_cards
             playoffs[seeded] += 1
             division[winners] += 1
             seeds[seeded, np.arange(len(seeded))] += 1
+            if keep_outcomes:
+                seed_matrix[s, seeded] = np.arange(1, len(seeded) + 1)
+    if keep_outcomes:
+        check_seed_matrix(seed_matrix, wild_cards)
     return Result(sims, playoffs, division, seeds, wins.mean(axis=0), wins.var(axis=0),
-                  home_share.mean(axis=0), wins)
+                  home_share.mean(axis=0), wins, seed_matrix)
 
