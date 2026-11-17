@@ -10,6 +10,9 @@ Rules agreed 2026-11-06 (see CLAUDE.md), applied to each daily fair-value file a
   spread and never past the band edge minus a cushion (maker fee + 1c).
 - The quote lives from T + 10 min (when the fair value exists) until the next kickoff or
   the next day's quote, whichever is first.
+- Edge cap (2026-11-17): no quote when the band clears the market by more than 15c. A gap that
+  big in a thin market more likely means the model is missing news (an injured starter) than
+  that the market is wrong. Such quotes are still tracked, as kind "capped", to test that.
 - Filled only if a non-block trade goes THROUGH the price (below our bid, above our ask).
 - Taker comparison: at the first snapshot after T + 10 min, cross the spread if the band
   still beats the price after the taker fee.
@@ -47,13 +50,17 @@ TICK = 0.01
 MAKER_FEE = 0.0
 CUSHION = MAKER_FEE + TICK
 QUOTE_DELAY = timedelta(minutes=10)
+# Decided 2026-11-17 after NE's QB was injured: the model kept NE's rating while the market
+# dropped 40 points, and it wanted to buy at a 25c "edge".
+MAX_EDGE = 0.15
 HORIZONS = ("1h", "24h", "next game day", "latest", "settlement")
 
 SCHEMA = """
 CREATE TABLE quotes (
     id INTEGER PRIMARY KEY, t TEXT, team TEXT, ticker TEXT, side TEXT, price REAL,
     fair REAL, band_low REAL, band_high REAL, book_bid REAL, book_ask REAL,
-    start TEXT, end TEXT, status TEXT, fill_time TEXT, fill_trade_price REAL
+    start TEXT, end TEXT, status TEXT, fill_time TEXT, fill_trade_price REAL,
+    edge REAL, capped INTEGER  -- capped: edge over MAX_EDGE, so not a real quote under the rule
 );
 CREATE TABLE takers (
     id INTEGER PRIMARY KEY, t TEXT, team TEXT, ticker TEXT, side TEXT, entry_time TEXT,
@@ -84,6 +91,17 @@ def cents_down(x):
 
 def cents_up(x):
     return math.ceil(round(x * 100, 9)) / 100
+
+
+def quote_edge(side, band_low, band_high, bid, ask):
+    """How far the band clears the market: band low - ask for a bid, bid - band high for an ask."""
+    if side == "bid":
+        return None if ask is None else band_low - ask
+    return None if bid is None else bid - band_high
+
+
+def over_edge_cap(edge):
+    return edge is not None and edge > MAX_EDGE + 1e-9
 
 
 def quote_price(side, band_low, band_high, bid, ask):
@@ -221,18 +239,21 @@ def build(base, out_path):
             for side in ("bid", "ask"):
                 price = quote_price(side, low, high, bid, ask)
                 if price is not None:
+                    edge = quote_edge(side, low, high, bid, ask)
+                    capped = over_edge_cap(edge)
                     # Only trades we've collected count; a window still running stays open.
                     seen_until = min(end, market.trades_until) if market.trades_until else start
                     fill = market.first_trade_through(ticker, side, price, start, seen_until)
                     status = "filled" if fill else "unfilled" if seen_until >= end else "open"
                     cur = out.execute(
                         "INSERT INTO quotes (t, team, ticker, side, price, fair, band_low, band_high, book_bid, "
-                        "book_ask, start, end, status, fill_time, fill_trade_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "book_ask, start, end, status, fill_time, fill_trade_price, edge, capped) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (iso(t), team, ticker, side, price, fair, low, high, bid, ask, iso(start), iso(end), status,
-                         fill[0] if fill else None, fill[1] if fill else None))
+                         fill[0] if fill else None, fill[1] if fill else None, edge, int(capped)))
                     if fill:
                         entry = data.parse_time(fill[0])
-                        add_markouts(out, market, "quote", cur.lastrowid, ticker, side, entry, price, MAKER_FEE, kickoffs)
+                        add_markouts(out, market, "capped" if capped else "quote", cur.lastrowid, ticker, side, entry, price, MAKER_FEE, kickoffs)
 
             # Taker comparison, at the first snapshot after the fair value exists.
             if taker_snap is None:
@@ -323,12 +344,19 @@ def agrees_with_longshot_bias(side, price):
     return (side == "bid" and price >= 0.5) or (side == "ask" and price < 0.5)
 
 
+KINDS = ("quote", "capped", "taker", "real")
+
+
 def report(out):
-    print("Quotes by status:", dict(out.execute("SELECT status, COUNT(*) FROM quotes GROUP BY status").fetchall()))
+    print("Quotes by status:", dict(out.execute("SELECT status, COUNT(*) FROM quotes WHERE NOT capped "
+                                                "GROUP BY status").fetchall()))
+    print(f"Over the {MAX_EDGE * 100:.0f}c edge cap (not quoted; tracked as 'capped'):",
+          dict(out.execute("SELECT status, COUNT(*) FROM quotes WHERE capped GROUP BY status").fetchall()))
     print("Taker comparisons:", out.execute("SELECT COUNT(*) FROM takers").fetchone()[0])
     print("\nMarkouts per contract, after fees (mean +- SE by game day).")
     print("Mid = did the price move our way; exit = closing out by crossing the spread.")
-    for kind in ("quote", "taker", "real"):
+    print("capped = what quotes over the edge cap would have done, had they been placed.")
+    for kind in KINDS:
         for horizon in HORIZONS:
             rows = out.execute("SELECT pnl_mid, pnl_exit, game_day FROM markouts WHERE kind = ? AND horizon = ? "
                                "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
@@ -345,7 +373,7 @@ def report(out):
     print("\nLatest markouts (mid) with each TEAM as one unit: the model quotes the same teams day")
     print("after day, and every fill is marked against the same latest price, so teams, not fills,")
     print("are the independent pieces of evidence.")
-    for kind in ("quote", "taker", "real"):
+    for kind in KINDS:
         rows = out.execute("SELECT pnl_mid, ticker FROM markouts WHERE kind = ? AND horizon = 'latest' "
                            "AND pnl_mid IS NOT NULL", (kind,)).fetchall()
         print(f"  {kind:5s} latest  {summary(rows, 'teams')}")
@@ -358,7 +386,7 @@ def report(out):
 
     print("\nLatest quotes:")
     for row in out.execute("SELECT t, team, side, price, round(fair, 3), round(band_low, 2), round(band_high, 2), "
-                           "book_bid, book_ask, status FROM quotes ORDER BY t DESC, team LIMIT 15"):
+                           "book_bid, book_ask, status || CASE WHEN capped THEN ' (capped)' ELSE '' END FROM quotes ORDER BY t DESC, team LIMIT 15"):
         print("  ", *row)
 
 

@@ -41,7 +41,7 @@ from collector.rawlog import RoundLog
 from collector.round import data_dir
 from model import data
 from model.league import TEAMS, playoff_ticker
-from model.paper import FAIRVALUE_SUFFIX, QUOTE_DELAY, quote_price
+from model.paper import FAIRVALUE_SUFFIX, MAX_EDGE, QUOTE_DELAY, over_edge_cap, quote_edge, quote_price
 from trader.kalshi import BASE_URLS, Client, Signer
 
 CONTRACTS = 1
@@ -63,6 +63,7 @@ class Order:
     price: float
     edge: float  # how far the band clears the market, in dollars
     client_order_id: str
+    capped: bool = False  # edge over MAX_EDGE: logged, never placed
 
     @property
     def cost(self):
@@ -109,14 +110,16 @@ def plan(rows, books, day, existing_ids, committed, orders_today, balance, per_t
             client_id = f"{CLIENT_PREFIX}-{day}-{team}-{side}"
             if price is None or client_id in existing_ids:
                 continue
-            edge = low - ask if side == "bid" else bid - high
-            candidates.append(Order(team, ticker, side, price, edge, client_id))
+            edge = quote_edge(side, low, high, bid, ask)
+            candidates.append(Order(team, ticker, side, price, edge, client_id, over_edge_cap(edge)))
     candidates.sort(key=lambda o: -o.edge)
 
     budget = min(MAX_COMMITTED_DOLLARS - committed, balance)
     slots = MAX_NEW_ORDERS_PER_DAY - orders_today
     chosen = []
     for order in candidates:
+        if order.capped:
+            continue
         if len(chosen) >= slots:
             break
         if per_team.get(order.ticker, 0) + CONTRACTS > MAX_CONTRACTS_PER_TEAM:
@@ -291,6 +294,9 @@ def run(args, log, tdir, now):
         print("account balance is $0: nothing can be placed (add funds; on demo, mock funds)")
     print(f"balance ${balance:.2f}, committed ${committed:.2f}, already placed today {len(existing)}; "
           f"{len(candidates)} candidates, placing {len(chosen)}; orders expire {expires:%Y-%m-%d %H:%M} UTC")
+    for order in (o for o in candidates if o.capped):
+        print(f"  {order.team:4s} {order.side} skipped: edge {order.edge * 100:.1f}c is over the "
+              f"{MAX_EDGE * 100:.0f}c cap (the model is probably missing news)")
     results = []
     for order in chosen:
         outcome, order_id = place(client, order, expires, since) if args.live else ("dry run", None)

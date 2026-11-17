@@ -29,6 +29,13 @@ class PricingTests(unittest.TestCase):
         # it would only matter with a maker fee.
         self.assertEqual(quote_price("bid", 0.851, 0.90, 0.80, 0.85), 0.81)
 
+    def test_edge_cap(self):
+        self.assertAlmostEqual(paper.quote_edge("bid", 0.46, 0.55, 0.20, 0.21), 0.25)
+        self.assertAlmostEqual(paper.quote_edge("ask", 0.30, 0.40, 0.55, 0.60), 0.15)
+        self.assertTrue(paper.over_edge_cap(0.25))
+        self.assertFalse(paper.over_edge_cap(0.15))  # exactly at the cap is still quoted
+        self.assertFalse(paper.over_edge_cap(None))
+
     def test_no_quote_when_band_overlaps_market(self):
         self.assertIsNone(quote_price("bid", 0.40, 0.50, 0.44, 0.46))
         self.assertIsNone(quote_price("ask", 0.40, 0.50, 0.44, 0.46))
@@ -157,6 +164,18 @@ class BuildTests(unittest.TestCase):
             "SELECT horizon FROM markouts m JOIN quotes q ON m.ref = q.id WHERE kind = 'quote' AND q.team = 'NYG'")]
         self.assertIn("latest", nyg)
         self.assertNotIn("settlement", nyg)
+
+    def test_quote_over_the_edge_cap_is_tracked_but_not_counted(self):
+        self.out.close()
+        path = self.base / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv"
+        path.write_text(path.read_text().replace("NYG,0.44,0.4,0.48", "NYG,0.34,0.3,0.38"))  # edge 20c
+        self.out = paper.build(self.base, self.base / "paper.sqlite")
+        rows = self.out.execute("SELECT team, status, capped, round(edge, 2) FROM quotes ORDER BY team").fetchall()
+        self.assertEqual(rows, [("BUF", "filled", 0, 0.01), ("NYG", "filled", 1, 0.2)])
+        kinds = {k for (k,) in self.out.execute(
+            "SELECT DISTINCT m.kind FROM markouts m JOIN quotes q ON m.ref = q.id "
+            "WHERE m.kind IN ('quote', 'capped') AND q.team = 'NYG'")}
+        self.assertEqual(kinds, {"capped"})
 
     def test_markouts_carry_their_game_day(self):
         days = {d for (d,) in self.out.execute("SELECT DISTINCT game_day FROM markouts")}

@@ -98,10 +98,16 @@ Agreed (2026-11-04/05):
   $20 committed, 10 new orders a day, 3 contracts per team (2026-11-15), hold to settlement,
   deposit only $20. Production approved 2026-11-15 pending the demo-rejection and by-team checks. Post-only orders
   that expire at the next kickoff. Dry run by default; production needs two settings.
+  Live on production from 2026-11-16.
+- Edge cap (decided 2026-11-17): no quote, paper or real, when the band clears the market by
+  more than 15c. NE's QB (Maye) was hurt on Nov 15; the market fell ~40 points, the model kept
+  NE's rating (lines from before the injury, then a bye) and wanted to buy at a 25c "edge".
+  Capped quotes are still scored as kind "capped" in the paper report, to test whether big
+  gaps really are missing news. Stopgap until the model handles injuries (open decision below).
 
 Open decisions:
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
-  later weeks.
+  later weeks. Now urgent for injuries: see the edge cap above.
 
 ## Error log categories (for my own mistakes)
 - Answered an adjacent question

@@ -24,6 +24,7 @@ with about $20.
 | New orders per day | 10, biggest edge first |
 | Orders per team and side per day | 1 |
 | Contracts per team (held + resting, either side) | 3 |
+| Edge (band past the market) | 15c at most; bigger gaps are logged as `skipped`, never placed |
 | Fair values older than | 3 hours: no trading |
 
 An order request that fails in transit is looked up on the exchange, never resent.

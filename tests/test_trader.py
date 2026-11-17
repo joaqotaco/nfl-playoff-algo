@@ -38,6 +38,14 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([(o.team, o.side) for o in chosen], [("NYG", "ask"), ("NO", "bid"), ("BUF", "bid")])
         self.assertEqual(chosen[0].client_order_id, "nflpo-20261110-NYG-ask")
 
+    def test_edge_over_the_cap_is_never_placed(self):
+        books = {**BOOKS, "KXNFLPLAYOFF-27-NE": (0.20, 0.21)}
+        rows = ROWS + [row("NE", 0.46, 0.55)]  # bid, edge 25c: the model is probably missing news
+        chosen, candidates = plan(rows, books, "d", set(), 0.0, 0, 20.0)
+        self.assertNotIn("NE", [o.team for o in chosen])
+        self.assertEqual([(o.team, o.capped) for o in candidates if o.capped], [("NE", True)])
+        self.assertEqual([(o.team, o.side) for o in chosen], [("NYG", "ask"), ("NO", "bid"), ("BUF", "bid")])
+
     def test_cost_of_an_ask_is_the_no_price(self):
         order = Order("NYG", "KXNFLPLAYOFF-27-NYG", "ask", 0.59, 0.1, "x")
         self.assertAlmostEqual(order.cost, 0.41)
