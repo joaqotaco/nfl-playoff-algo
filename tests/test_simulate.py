@@ -30,9 +30,13 @@ PINNED_CSV = "2c9b09e11f7d4324051c8a1a8c83856a152755d27129258be8e19d5283d4709e"
 
 def csv_hash(path):
     """The CSV's bytes, except ratings rounded to 1e-9: least squares differs in the last digits
-    between numpy builds (1.26 vs 2.4), while every probability matches exactly."""
+    between numpy builds (1.26 vs 2.4), while every probability matches exactly. The next_line
+    column (added 2026-11-16, after the pin) is left out; NextLineTests checks it."""
     with open(path, newline="") as f:
         rows = list(csv.reader(f))
+    if "next_line" in rows[0]:
+        drop = rows[0].index("next_line")
+        rows = [r[:drop] + r[drop + 1:] for r in rows]
     col = rows[0].index("rating")
     for row in rows[1:]:
         row[col] = f"{float(row[col]):.9f}"
@@ -88,6 +92,34 @@ class PinnedCountsTests(World, unittest.TestCase):
         path = fairvalue.run(world.AT, args, self.base, self.nflverse, self.games, out=lambda line: None)
         self.assertEqual(path.name, "20261108T1400Z-calibrated-hl2-k.csv")
         self.assertEqual(csv_hash(path), PINNED_CSV)
+
+class NextLineTests(World, unittest.TestCase):
+    def kalshi(self):
+        return data.kalshi_lines(self.base / "tidy.sqlite", world.AT, self.games, use_moneylines=True)[1]
+
+    def test_every_team_has_a_line_when_its_next_game_is_listed(self):
+        self.assertEqual(data.teams_with_next_line(self.games, world.AT, self.kalshi()), set(TEAMS))
+
+    def test_unlisted_next_game_means_no_line_for_both_teams(self):
+        kalshi = self.kalshi()
+        gone = kalshi[0]
+        rest = [k for k in kalshi if k is not gone]
+        self.assertEqual(set(TEAMS) - data.teams_with_next_line(self.games, world.AT, rest), {gone.home, gone.away})
+
+    def test_only_the_next_game_counts(self):
+        # A line for the game after next doesn't help: drop week 9's games from the schedule's
+        # lines but keep a made-up week-10 one.
+        week10 = next(g for g in self.games if g.week == world.PLAYED_WEEKS + 2)
+        fake = [data.KalshiLine(week10.home, week10.away, data.gameday(week10), 1.0, None, None)]
+        self.assertEqual(data.teams_with_next_line(self.games, world.AT, fake), set())
+
+    def test_fair_value_csv_has_the_column(self):
+        args = argparse.Namespace(sims=SIMS, uncertainty=None, half_life=2, ratings_use_kalshi=True,
+                                  moneylines=True, seed=0)
+        path = fairvalue.run(world.AT, args, self.base, self.nflverse, self.games, out=lambda line: None)
+        with open(path, newline="") as f:
+            self.assertEqual({r["next_line"] for r in csv.DictReader(f)}, {"1"})
+
 
 class KeepOutcomesTests(World, unittest.TestCase):
     def test_keeping_outcomes_changes_no_count(self):

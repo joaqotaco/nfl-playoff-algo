@@ -131,6 +131,7 @@ def run(at, args, base, path, games, out=print):
         return np.clip(probs.min(0) - error, 0, 1), np.clip(probs.max(0) + error, 0, 1)
 
     play_low, play_high = band("playoffs")
+    with_line = data.teams_with_next_line(games, at, kalshi)
     div_low, div_high = band("division")
 
     tau_cols = "".join(f"  {t:>9s}" for t in taus)
@@ -151,7 +152,9 @@ def run(at, args, base, path, games, out=print):
                      "p_playoffs": p_playoff[i], "se": se[i],
                      "p_playoffs_low": play_low[i], "p_playoffs_high": play_high[i],
                      "p_division": p_division[i], "p_division_low": div_low[i], "p_division_high": div_high[i],
-                     "playoff_bid": bid, "playoff_ask": ask, "division_bid": dbid, "division_ask": dask})
+                     "playoff_bid": bid, "playoff_ask": ask, "division_bid": dbid, "division_ask": dask,
+                     # 1 if the team's next game has a Kalshi line at T: the line rule for quoting
+                     "next_line": int(team in with_line)})
 
     mids = [(p_playoff[i], playoff[playoff_ticker(TEAMS[i])]) for i in range(32)]
     outside = sum(bool(verdict(p, b, a)) for p, (_, b, a, _) in mids)
@@ -160,6 +163,8 @@ def run(at, args, base, path, games, out=print):
           f"mean |model - mid| {np.mean(gaps) * 100:.1f} points (mids only for this summary)")
     bids = [b for _, (_, b, _, _) in playoff.items() if b is not None]
     asks = [a for _, (_, _, a, _) in playoff.items() if a is not None]
+    if len(with_line) < 32:
+        out(f"no Kalshi line for the next game (not quoted): {', '.join(sorted(set(TEAMS) - with_line))}")
     out(f"\nKalshi playoff book: sum of bids {sum(bids):.2f} ({len(bids)} teams), "
           f"sum of asks {sum(asks):.2f} ({len(asks)} teams); model sums to {p_playoff.sum():.2f}")
 

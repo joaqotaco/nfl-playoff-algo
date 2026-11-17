@@ -29,6 +29,13 @@ class PricingTests(unittest.TestCase):
         # it would only matter with a maker fee.
         self.assertEqual(quote_price("bid", 0.851, 0.90, 0.80, 0.85), 0.81)
 
+    def test_edge_and_big_gap(self):
+        self.assertAlmostEqual(paper.quote_edge("bid", 0.46, 0.55, 0.20, 0.21), 0.25)
+        self.assertAlmostEqual(paper.quote_edge("ask", 0.30, 0.40, 0.55, 0.60), 0.15)
+        self.assertTrue(paper.is_big_gap(0.25))
+        self.assertFalse(paper.is_big_gap(0.15))
+        self.assertFalse(paper.is_big_gap(None))
+
     def test_no_quote_when_band_overlaps_market(self):
         self.assertIsNone(quote_price("bid", 0.40, 0.50, 0.44, 0.46))
         self.assertIsNone(quote_price("ask", 0.40, 0.50, 0.44, 0.46))
@@ -104,14 +111,14 @@ class BuildTests(unittest.TestCase):
         (self.base / "fairvalues").mkdir()
         with open(self.base / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv", "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["team", "p_playoffs", "p_playoffs_low", "p_playoffs_high",
-                                              "playoff_bid", "playoff_ask"])
+                                              "playoff_bid", "playoff_ask", "next_line"])
             w.writeheader()
             w.writerow(dict(team="BUF", p_playoffs=0.98, p_playoffs_low=0.97, p_playoffs_high=0.99,
-                            playoff_bid=0.94, playoff_ask=0.96))
+                            playoff_bid=0.94, playoff_ask=0.96, next_line=1))
             w.writerow(dict(team="NYG", p_playoffs=0.44, p_playoffs_low=0.40, p_playoffs_high=0.48,
-                            playoff_bid=0.58, playoff_ask=0.59))
+                            playoff_bid=0.58, playoff_ask=0.59, next_line=1))
             w.writerow(dict(team="DAL", p_playoffs=0.30, p_playoffs_low=0.27, p_playoffs_high=0.33,
-                            playoff_bid=0.28, playoff_ask=0.30))
+                            playoff_bid=0.28, playoff_ask=0.30, next_line=1))
         # A one-off test file at another time must not become a paper-trading day.
         with open(self.base / "fairvalues" / "20261110T0330Z-calibrated-hl2-k.csv", "w") as f:
             f.write("team,p_playoffs,p_playoffs_low,p_playoffs_high,playoff_bid,playoff_ask\n"
@@ -157,6 +164,35 @@ class BuildTests(unittest.TestCase):
             "SELECT horizon FROM markouts m JOIN quotes q ON m.ref = q.id WHERE kind = 'quote' AND q.team = 'NYG'")]
         self.assertIn("latest", nyg)
         self.assertNotIn("settlement", nyg)
+
+    def rebuild(self, edit):
+        self.out.close()
+        path = self.base / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv"
+        path.write_text(edit(path.read_text()))
+        self.out = paper.build(self.base, self.base / "paper.sqlite")
+
+    def kinds(self, team):
+        return {k for (k,) in self.out.execute(
+            "SELECT DISTINCT m.kind FROM markouts m JOIN quotes q ON m.ref = q.id "
+            "WHERE m.kind IN ('quote', 'no-line') AND q.team = ?", (team,))}
+
+    def test_quotes_carry_edge_and_kind(self):
+        rows = self.out.execute("SELECT team, round(edge, 2), next_line, quote_kind FROM quotes ORDER BY team").fetchall()
+        self.assertEqual(rows, [("BUF", 0.01, 1, "quote"), ("NYG", 0.1, 1, "quote")])
+
+    def test_team_without_a_line_is_scored_as_no_line(self):
+        self.rebuild(lambda text: text.replace("0.58,0.59,1", "0.58,0.59,0"))
+        rows = self.out.execute("SELECT team, status, quote_kind FROM quotes ORDER BY team").fetchall()
+        self.assertEqual(rows, [("BUF", "filled", "quote"), ("NYG", "filled", "no-line")])
+        self.assertEqual(self.kinds("NYG"), {"no-line"})
+        self.assertEqual(self.kinds("BUF"), {"quote"})
+
+    def test_older_files_get_the_rule_from_the_books_at_t(self):
+        # No next_line column: worked out from the snapshot at T. This world lists no game
+        # markets, and neither BUF nor NYG has a game left, so neither had a line.
+        self.rebuild(lambda text: "\n".join(line.rsplit(",", 1)[0] for line in text.splitlines()) + "\n")
+        rows = self.out.execute("SELECT team, next_line, quote_kind FROM quotes ORDER BY team").fetchall()
+        self.assertEqual(rows, [("BUF", 0, "no-line"), ("NYG", 0, "no-line")])
 
     def test_markouts_carry_their_game_day(self):
         days = {d for (d,) in self.out.execute("SELECT DISTINCT game_day FROM markouts")}
