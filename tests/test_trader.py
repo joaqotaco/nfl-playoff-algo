@@ -19,8 +19,8 @@ except ImportError:
     HAVE_CRYPTO = False
 
 
-def row(team, low, high):
-    return {"team": team, "p_playoffs_low": str(low), "p_playoffs_high": str(high)}
+def row(team, low, high, next_line="1"):
+    return {"team": team, "p_playoffs_low": str(low), "p_playoffs_high": str(high), "next_line": next_line}
 
 
 BOOKS = {
@@ -37,6 +37,26 @@ class PlanTests(unittest.TestCase):
         chosen, candidates = plan(ROWS, BOOKS, "20261110", set(), 0.0, 0, 20.0)
         self.assertEqual([(o.team, o.side) for o in chosen], [("NYG", "ask"), ("NO", "bid"), ("BUF", "bid")])
         self.assertEqual(chosen[0].client_order_id, "nflpo-20261110-NYG-ask")
+
+    def test_team_without_a_line_for_its_next_game_is_never_placed(self):
+        books = {**BOOKS, "KXNFLPLAYOFF-27-NE": (0.20, 0.21)}
+        rows = ROWS + [row("NE", 0.46, 0.55, next_line="0")]  # on its bye: biggest edge, but stale
+        chosen, candidates = plan(rows, books, "d", set(), 0.0, 0, 20.0)
+        self.assertEqual([(o.team, o.side) for o in chosen], [("NYG", "ask"), ("NO", "bid"), ("BUF", "bid")])
+        self.assertEqual([(o.team, o.skipped) for o in candidates if o.skipped],
+                         [("NE", "no Kalshi line for its next game")])
+
+    def test_big_gap_with_a_line_is_still_placed(self):
+        books = {**BOOKS, "KXNFLPLAYOFF-27-NE": (0.20, 0.21)}
+        chosen, _ = plan(ROWS + [row("NE", 0.46, 0.55)], books, "d", set(), 0.0, 0, 20.0)
+        self.assertEqual(chosen[0].team, "NE")
+        self.assertAlmostEqual(chosen[0].edge, 0.25)
+
+    def test_fair_values_without_the_column_place_nothing(self):
+        rows = [{k: v for k, v in r.items() if k != "next_line"} for r in ROWS]
+        chosen, candidates = plan(rows, BOOKS, "d", set(), 0.0, 0, 20.0)
+        self.assertEqual(chosen, [])
+        self.assertEqual(len(candidates), 3)
 
     def test_cost_of_an_ask_is_the_no_price(self):
         order = Order("NYG", "KXNFLPLAYOFF-27-NYG", "ask", 0.59, 0.1, "x")
@@ -149,7 +169,7 @@ class RunTests(unittest.TestCase):
         (self.trader / "raw").mkdir(parents=True)
         self.now = datetime(2026, 11, 10, 14, 15, tzinfo=UTC)
         with open(self.collector / "fairvalues" / "20261110T1400Z-calibrated-hl2-k.csv", "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["team", "p_playoffs_low", "p_playoffs_high"])
+            w = csv.DictWriter(f, fieldnames=["team", "p_playoffs_low", "p_playoffs_high", "next_line"])
             w.writeheader()
             w.writerows(ROWS)
         with open(self.collector / "nflverse" / "games-20261110T000000Z.csv", "w", newline="") as f:

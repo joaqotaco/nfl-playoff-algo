@@ -169,24 +169,43 @@ def kalshi_lines(db_path, at, games, use_moneylines=False):
         game = upcoming.get((date, frozenset(teams)))
         if game is None:
             continue
-        gameday = game.kickoff.astimezone(EASTERN).strftime("%Y-%m-%d")
+        day = gameday(game)
         # A home strike k gives P(margin > k); an away strike k gives P(margin < -k).
         points = [(k, p) if team == game.home else (-k, 1 - p) for team, k, p in entry["spread"]]
         line = median_margin(points)
         if line is not None:
-            lines.append(KalshiLine(game.home, game.away, gameday, line, fitted_sigma(points),
+            lines.append(KalshiLine(game.home, game.away, day, line, fitted_sigma(points),
                                     entry["win"].get(game.home)))
         elif not entry["spread"] and game.home in entry["win"]:
-            moneyline_only.append((game, gameday, entry["win"][game.home]))
+            moneyline_only.append((game, day, entry["win"][game.home]))
 
     sigmas = [k.sigma for k in lines if k.sigma]
     if use_moneylines and moneyline_only and sigmas:
         sigma = sorted(sigmas)[len(sigmas) // 2]
-        for game, gameday, p in moneyline_only:
+        for game, day, p in moneyline_only:
             p = min(max(p, MIN_STRIKE_PROB), 1 - MIN_STRIKE_PROB)
-            lines.append(KalshiLine(game.home, game.away, gameday, sigma * NormalDist().inv_cdf(p),
+            lines.append(KalshiLine(game.home, game.away, day, sigma * NormalDist().inv_cdf(p),
                                     None, p, from_moneyline=True))
     return slot, lines
+
+
+def gameday(game):
+    """The game's ET date, as Kalshi lines carry it."""
+    return game.kickoff.astimezone(EASTERN).strftime("%Y-%m-%d")
+
+
+def teams_with_next_line(games, at, kalshi):
+    """Teams whose next game after T has a Kalshi line at T (from spread strikes or a moneyline).
+
+    The line rule (2026-11-16): a team without one, e.g. on a bye, isn't quoted, because the
+    model's rating for it can't have seen any news since its last line.
+    """
+    listed = {(k.home, k.away, k.gameday) for k in kalshi}
+    upcoming = {}
+    for game in sorted((g for g in games if g.kickoff > at), key=lambda g: g.kickoff):
+        for team in (game.home, game.away):
+            upcoming.setdefault(team, game)
+    return {team for team, g in upcoming.items() if (g.home, g.away, gameday(g)) in listed}
 
 
 def parse_time(text):

@@ -10,6 +10,11 @@ Rules agreed 2026-11-06 (see CLAUDE.md), applied to each daily fair-value file a
   spread and never past the band edge minus a cushion (maker fee + 1c).
 - The quote lives from T + 10 min (when the fair value exists) until the next kickoff or
   the next day's quote, whichever is first.
+- Line rule (2026-11-16): no quote for a team whose next game has no Kalshi line at T
+  (spread strikes or a moneyline), e.g. a team on its bye. The model's rating for it can't
+  have seen news since its last line. Such quotes are still scored, as kind "no-line".
+- Big gaps (2026-11-16): quotes where the band clears the market by more than 15c are placed
+  as usual but flagged, so the report can test whether big gaps mean the model is missing news.
 - Filled only if a non-block trade goes THROUGH the price (below our bid, above our ask).
 - Taker comparison: at the first snapshot after T + 10 min, cross the spread if the band
   still beats the price after the taker fee.
@@ -47,13 +52,17 @@ TICK = 0.01
 MAKER_FEE = 0.0
 CUSHION = MAKER_FEE + TICK
 QUOTE_DELAY = timedelta(minutes=10)
+BIG_GAP = 0.15  # tracking only: such quotes are still placed
 HORIZONS = ("1h", "24h", "next game day", "latest", "settlement")
 
 SCHEMA = """
 CREATE TABLE quotes (
     id INTEGER PRIMARY KEY, t TEXT, team TEXT, ticker TEXT, side TEXT, price REAL,
     fair REAL, band_low REAL, band_high REAL, book_bid REAL, book_ask REAL,
-    start TEXT, end TEXT, status TEXT, fill_time TEXT, fill_trade_price REAL
+    start TEXT, end TEXT, status TEXT, fill_time TEXT, fill_trade_price REAL,
+    edge REAL,          -- how far the band clears the market
+    next_line INTEGER,  -- 1 if the team's next game had a Kalshi line at T; NULL if unknown
+    quote_kind TEXT     -- 'quote', or 'no-line' when the line rule skips it (the markouts' kind)
 );
 CREATE TABLE takers (
     id INTEGER PRIMARY KEY, t TEXT, team TEXT, ticker TEXT, side TEXT, entry_time TEXT,
@@ -84,6 +93,31 @@ def cents_down(x):
 
 def cents_up(x):
     return math.ceil(round(x * 100, 9)) / 100
+
+
+def quote_edge(side, band_low, band_high, bid, ask):
+    """How far the band clears the market: band low - ask for a bid, bid - band high for an ask."""
+    if side == "bid":
+        return None if ask is None else band_low - ask
+    return None if bid is None else bid - band_high
+
+
+def is_big_gap(edge):
+    return edge is not None and edge > BIG_GAP + 1e-9
+
+
+def next_line_flags(base, t, rows, games):
+    """{team: 1 or 0} from the fair-value CSV's next_line column. Files written before the
+    line rule don't have it, so it's worked out from the collector's books at T instead
+    (None for every team if that snapshot is missing)."""
+    if rows and "next_line" in rows[0]:
+        return {r["team"]: int(r["next_line"]) for r in rows}
+    try:
+        _, kalshi = data.kalshi_lines(base / "tidy.sqlite", t, games, use_moneylines=True)
+    except LookupError:
+        return {r["team"]: None for r in rows}
+    with_line = data.teams_with_next_line(games, t, kalshi)
+    return {r["team"]: int(r["team"] in with_line) for r in rows}
 
 
 def quote_price(side, band_low, band_high, bid, ask):
@@ -214,6 +248,7 @@ def build(base, out_path):
         start = t + QUOTE_DELAY
         end = min([k for k in kickoffs if k > start][:1] + [next_t[t] + QUOTE_DELAY])
         taker_snap = market.first_snapshot_after(start)
+        next_line = next_line_flags(base, t, rows, games)
         for row in rows:
             team, ticker = row["team"], playoff_ticker(row["team"])
             fair, low, high = number(row["p_playoffs"]), number(row["p_playoffs_low"]), number(row["p_playoffs_high"])
@@ -221,18 +256,21 @@ def build(base, out_path):
             for side in ("bid", "ask"):
                 price = quote_price(side, low, high, bid, ask)
                 if price is not None:
+                    edge = quote_edge(side, low, high, bid, ask)
+                    kind = "no-line" if next_line[team] == 0 else "quote"
                     # Only trades we've collected count; a window still running stays open.
                     seen_until = min(end, market.trades_until) if market.trades_until else start
                     fill = market.first_trade_through(ticker, side, price, start, seen_until)
                     status = "filled" if fill else "unfilled" if seen_until >= end else "open"
                     cur = out.execute(
                         "INSERT INTO quotes (t, team, ticker, side, price, fair, band_low, band_high, book_bid, "
-                        "book_ask, start, end, status, fill_time, fill_trade_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "book_ask, start, end, status, fill_time, fill_trade_price, edge, next_line, quote_kind) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (iso(t), team, ticker, side, price, fair, low, high, bid, ask, iso(start), iso(end), status,
-                         fill[0] if fill else None, fill[1] if fill else None))
+                         fill[0] if fill else None, fill[1] if fill else None, edge, next_line[team], kind))
                     if fill:
                         entry = data.parse_time(fill[0])
-                        add_markouts(out, market, "quote", cur.lastrowid, ticker, side, entry, price, MAKER_FEE, kickoffs)
+                        add_markouts(out, market, kind, cur.lastrowid, ticker, side, entry, price, MAKER_FEE, kickoffs)
 
             # Taker comparison, at the first snapshot after the fair value exists.
             if taker_snap is None:
@@ -323,32 +361,50 @@ def agrees_with_longshot_bias(side, price):
     return (side == "bid" and price >= 0.5) or (side == "ask" and price < 0.5)
 
 
+# Report rows: label -> SQL condition on markouts m joined to quotes q.
+GROUPS = {
+    "quote": "m.kind = 'quote'",
+    f"  gap>{BIG_GAP * 100:.0f}c": f"m.kind = 'quote' AND q.edge > {BIG_GAP + 1e-9}",
+    "no-line": "m.kind = 'no-line'",
+    "taker": "m.kind = 'taker'",
+    "real": "m.kind = 'real'",
+}
+JOIN = "FROM markouts m LEFT JOIN quotes q ON m.kind IN ('quote', 'no-line') AND q.id = m.ref"
+
+
 def report(out):
-    print("Quotes by status:", dict(out.execute("SELECT status, COUNT(*) FROM quotes GROUP BY status").fetchall()))
+    for kind in ("quote", "no-line"):
+        print(f"Quotes ({kind}) by status:", dict(out.execute(
+            "SELECT status, COUNT(*) FROM quotes WHERE quote_kind = ? GROUP BY status", (kind,)).fetchall()))
+    print(f"  of which the band clears the market by over {BIG_GAP * 100:.0f}c:", dict(out.execute(
+        "SELECT status, COUNT(*) FROM quotes WHERE quote_kind = 'quote' AND edge > ? GROUP BY status",
+        (BIG_GAP + 1e-9,)).fetchall()))
     print("Taker comparisons:", out.execute("SELECT COUNT(*) FROM takers").fetchone()[0])
     print("\nMarkouts per contract, after fees (mean +- SE by game day).")
     print("Mid = did the price move our way; exit = closing out by crossing the spread.")
-    for kind in ("quote", "taker", "real"):
+    print(f"gap>{BIG_GAP * 100:.0f}c = the quotes above where the band cleared the market by over {BIG_GAP * 100:.0f}c; "
+          "no-line = skipped by the line rule, had they been placed.")
+    for kind, where in GROUPS.items():
         for horizon in HORIZONS:
-            rows = out.execute("SELECT pnl_mid, pnl_exit, game_day FROM markouts WHERE kind = ? AND horizon = ? "
-                               "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
-            print(f"  {kind:5s} {horizon:14s} mid {summary([(r[0], r[2]) for r in rows]):36s} "
+            rows = out.execute(f"SELECT m.pnl_mid, m.pnl_exit, m.game_day {JOIN} WHERE {where} AND m.horizon = ? "
+                               "AND m.pnl_mid IS NOT NULL", (horizon,)).fetchall()
+            print(f"  {kind:9s} {horizon:14s} mid {summary([(r[0], r[2]) for r in rows]):36s} "
                   f"exit {summary([(r[1], r[2]) for r in rows])}")
     print("\nBy favorite-longshot bias (mid markouts): agrees = buying a favorite or selling a longshot.")
-    for kind in ("quote", "taker", "real"):
+    for kind, where in GROUPS.items():
         for horizon in HORIZONS:
-            rows = out.execute("SELECT pnl_mid, game_day, side, price FROM markouts WHERE kind = ? AND horizon = ? "
-                               "AND pnl_mid IS NOT NULL", (kind, horizon)).fetchall()
+            rows = out.execute(f"SELECT m.pnl_mid, m.game_day, m.side, m.price {JOIN} WHERE {where} "
+                               "AND m.horizon = ? AND m.pnl_mid IS NOT NULL", (horizon,)).fetchall()
             agree = [(r[0], r[1]) for r in rows if agrees_with_longshot_bias(r[2], r[3])]
             against = [(r[0], r[1]) for r in rows if not agrees_with_longshot_bias(r[2], r[3])]
-            print(f"  {kind:5s} {horizon:14s} agrees {summary(agree):36s} against {summary(against)}")
+            print(f"  {kind:9s} {horizon:14s} agrees {summary(agree):36s} against {summary(against)}")
     print("\nLatest markouts (mid) with each TEAM as one unit: the model quotes the same teams day")
     print("after day, and every fill is marked against the same latest price, so teams, not fills,")
     print("are the independent pieces of evidence.")
-    for kind in ("quote", "taker", "real"):
-        rows = out.execute("SELECT pnl_mid, ticker FROM markouts WHERE kind = ? AND horizon = 'latest' "
-                           "AND pnl_mid IS NOT NULL", (kind,)).fetchall()
-        print(f"  {kind:5s} latest  {summary(rows, 'teams')}")
+    for kind, where in GROUPS.items():
+        rows = out.execute(f"SELECT m.pnl_mid, m.ticker {JOIN} WHERE {where} AND m.horizon = 'latest' "
+                           "AND m.pnl_mid IS NOT NULL").fetchall()
+        print(f"  {kind:9s} latest  {summary(rows, 'teams')}")
     print("\nQuote fills by team (latest mid markout, cents):")
     for team, side, n, mean in out.execute(
             "SELECT substr(ticker, 17), group_concat(DISTINCT side), COUNT(*), AVG(pnl_mid) * 100 FROM markouts "
@@ -358,7 +414,7 @@ def report(out):
 
     print("\nLatest quotes:")
     for row in out.execute("SELECT t, team, side, price, round(fair, 3), round(band_low, 2), round(band_high, 2), "
-                           "book_bid, book_ask, status FROM quotes ORDER BY t DESC, team LIMIT 15"):
+                           "book_bid, book_ask, status, round(edge, 2), quote_kind FROM quotes ORDER BY t DESC, team LIMIT 15"):
         print("  ", *row)
 
 

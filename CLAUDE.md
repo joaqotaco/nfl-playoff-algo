@@ -98,10 +98,21 @@ Agreed (2026-11-04/05):
   $20 committed, 10 new orders a day, 3 contracts per team (2026-11-15), hold to settlement,
   deposit only $20. Production approved 2026-11-15 pending the demo-rejection and by-team checks. Post-only orders
   that expire at the next kickoff. Dry run by default; production needs two settings.
+  Live on production from 2026-11-16.
+- Line rule (decided 2026-11-16): no quote, paper or real, for a team whose next game has no
+  Kalshi line (spread strikes or moneyline) at T, e.g. on its bye. The edge is turning current
+  lines into playoff odds; without a current line the rating can't have seen news. Trigger:
+  NE's QB (Maye) was hurt Nov 15, NE is on bye in Week 11, the market fell ~40 points and the
+  model wanted to buy at a 25c "edge". Skipped quotes are scored as kind "no-line".
+  A blanket edge cap was considered and rejected. Instead, quotes where the band clears the
+  market by over 15c are still placed but flagged, to test whether big gaps mean missing news.
+  Known limit: once NE's next line lists, its rating for later weeks is still mostly
+  pre-injury (the new line gets ~1/3 of the weight), so the stale edge can come back.
 
 Open decisions:
 - Temporary effects (QB out 2 weeks, weather, Week 18 rested starters) must not leak into
-  later weeks.
+  later weeks. Now relevant for injuries: the line rule only covers a team's bye week.
+  Candidate fix: a starting-QB term in the ratings, sized from 2015-2025 lines (not built).
 
 ## Error log categories (for my own mistakes)
 - Answered an adjacent question

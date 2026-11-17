@@ -83,6 +83,11 @@ Rebuilt from scratch after each daily fair-value run, into `paper.sqlite`:
 - **Quotes:** for each playoff contract where the band excludes Kalshi's 14:00 book, one paper
   contract one tick inside the market (never crossing it), live from 14:10 UTC to the next
   kickoff or the next day's quote. No maker fee on KXNFLPLAYOFF (`fee_type` quadratic).
+- **Line rule:** a team whose next game has no Kalshi line at T (e.g. on its bye) isn't
+  quoted; such quotes are scored as kind `no-line`. The fair-value CSV's `next_line` column
+  carries this; for older CSVs it's worked out from the collector's books at T.
+- **Big gaps:** quotes where the band clears the market by over 15c are placed as usual but
+  reported separately (`gap>15c`), to test whether big gaps mean the model is missing news.
 - **Fills:** only when a non-block trade goes through the price. A window still running is `open`.
 - **Taker comparison:** cross the spread at the 14:30 snapshot if the band still beats the price
   after the taker fee.
